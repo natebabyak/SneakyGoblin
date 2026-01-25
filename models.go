@@ -1,4 +1,7 @@
-package api
+package bot
+
+type Clan struct {
+}
 
 type Player struct {
 	Tag                      int    `json:"tag"`

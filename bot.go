@@ -1,11 +1,9 @@
-package main
+package bot
 
 import (
 	"log"
 	"os"
 	"os/signal"
-
-	"github.com/natebabyak/SneakyGoblin/commands"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/joho/godotenv"
@@ -34,7 +32,7 @@ func main() {
 	}
 
 	s.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		if h, ok := commands.CommandHandlers[i.ApplicationCommandData().Name]; ok {
+		if h, ok := CommandHandlers[i.ApplicationCommandData().Name]; ok {
 			h(s, i)
 		}
 	})
@@ -44,8 +42,8 @@ func main() {
 		log.Fatal("error opening connection:", err)
 	}
 
-	registeredCommands := make([]*discordgo.ApplicationCommand, len(commands.Commands))
-	for i, v := range commands.Commands {
+	registeredCommands := make([]*discordgo.ApplicationCommand, len(Commands))
+	for i, v := range Commands {
 		cmd, err := s.ApplicationCommandCreate(s.State.User.ID, v.GuildID, v)
 		if err != nil {
 			log.Panicf("Cannot create '%v' command: %v", v.Name, err)
