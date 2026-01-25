@@ -1,18 +1,18 @@
 package main
 
 import (
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
-	"syscall"
+
+	"github.com/natebabyak/SneakyGoblin/commands"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/joho/godotenv"
 )
 
 var (
-	apiToken string
+	// apiToken string
 	botToken string
 )
 
@@ -27,55 +27,46 @@ func init() {
 }
 
 func main() {
-	discord, err := discordgo.New("Bot " + botToken)
+	s, err := discordgo.New("Bot " + botToken)
 	if err != nil {
-		fmt.Println("error creating Discord session", err)
+		log.Fatal(err)
 		return
 	}
 
-	discord.Identify.Intents = discordgo.IntentsGuildMessages
+	s.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		if h, ok := commands.CommandHandlers[i.ApplicationCommandData().Name]; ok {
+			h(s, i)
+		}
+	})
 
-	discord.AddHandler(interactionCreate)
-
-	err = discord.Open()
+	err = s.Open()
 	if err != nil {
 		log.Fatal("error opening connection:", err)
 	}
 
-	cmd := &discordgo.ApplicationCommand{
-		Name:        "ping",
-		Description: "Replies with Pong!",
+	registeredCommands := make([]*discordgo.ApplicationCommand, len(commands.Commands))
+	for i, v := range commands.Commands {
+		cmd, err := s.ApplicationCommandCreate(s.State.User.ID, v.GuildID, v)
+		if err != nil {
+			log.Panicf("Cannot create '%v' command: %v", v.Name, err)
+		}
+		registeredCommands[i] = cmd
 	}
 
-	_, err = discord.ApplicationCommandCreate(
-		discord.State.User.ID,
-		"", // empty = global command
-		cmd,
-	)
-	if err != nil {
-		fmt.Println("cannot create slash command:", err)
+	defer s.Close()
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt)
+	log.Println("Press Ctrl+C to exit")
+	<-stop
+
+	for _, v := range registeredCommands {
+		err := s.ApplicationCommandDelete(s.State.User.ID, v.GuildID, v.ID)
+		if err != nil {
+			log.Panicf("Cannot delete '%v' command: %v", v.Name, err)
+		}
 	}
 
-	fmt.Println("Bot is running. Press CTRL-C to exit.")
-	sc := make(chan os.Signal, 1)
-	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt)
-	<-sc
+	log.Println("Gracefully shutting down.")
 
-	discord.Close()
-}
-
-func interactionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	if i.Type != discordgo.InteractionApplicationCommand {
-		return
-	}
-
-	switch i.ApplicationCommandData().Name {
-	case "ping":
-		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{
-				Content: "Pong!",
-			},
-		})
-	}
 }

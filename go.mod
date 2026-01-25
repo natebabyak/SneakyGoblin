@@ -1,4 +1,4 @@
-module example/hello
+module github.com/natebabyak/SneakyGoblin
 
 go 1.25.6
 
