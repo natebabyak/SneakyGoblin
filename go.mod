@@ -1,4 +1,4 @@
-module github.com/natebabyak/SneakyGoblin
+module main
 
 go 1.25.6
 
