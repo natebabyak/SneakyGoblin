@@ -1,7 +1,4 @@
-package main
-
-type Clan struct {
-}
+package models
 
 type Player struct {
 	Tag                      int    `json:"tag"`
