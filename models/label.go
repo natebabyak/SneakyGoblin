@@ -1,10 +1,10 @@
 package models
 
 type Label struct {
-	name     string
-	id       int
-	iconUrls struct {
-		small  string
-		medium string
+	Name     string
+	Id       int
+	IconUrls struct {
+		Small  string
+		Medium string
 	}
 }

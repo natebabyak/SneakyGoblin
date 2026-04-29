@@ -1,8 +1,8 @@
 package models
 
 type PlayerHouse struct {
-	elements []struct {
+	Elements []struct {
 		Type PlayerHouseElementType
-		id   int
+		Id   int
 	}
 }

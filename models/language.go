@@ -1,7 +1,7 @@
 package models
 
 type Language struct {
-	name         string
-	id           int
-	languageCode string
+	Name         string
+	Id           int
+	LanguageCode string
 }

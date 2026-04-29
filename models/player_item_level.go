@@ -1,15 +1,15 @@
 package models
 
 type PlayerItemLevel struct {
-	level              int
-	name               string
-	maxLevel           int
-	village            Village
-	superTroopIsActive bool
-	equipment          []struct {
-		name     string
-		level    int
-		maxLevel int
-		village  Village
+	Level              int
+	Name               string
+	MaxLevel           int
+	Village            Village
+	SuperTroopIsActive bool
+	Equipment          []struct {
+		Name     string
+		Level    int
+		MaxLevel int
+		Village  Village
 	}
 }

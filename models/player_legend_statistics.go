@@ -1,10 +1,10 @@
 package models
 
 type PlayerLegendStatistics struct {
-	currentSeason             []LegendLeagueTournamentSeasonResult
-	bestSeason                []LegendLeagueTournamentSeasonResult
-	previousSeason            []LegendLeagueTournamentSeasonResult
-	previousBuilderBaseSeason []LegendLeagueTournamentSeasonResult
-	bestBuilderBaseSeason     []LegendLeagueTournamentSeasonResult
-	legendTrophies            int
+	CurrentSeason             []LegendLeagueTournamentSeasonResult
+	BestSeason                []LegendLeagueTournamentSeasonResult
+	PreviousSeason            []LegendLeagueTournamentSeasonResult
+	PreviousBuilderBaseSeason []LegendLeagueTournamentSeasonResult
+	BestBuilderBaseSeason     []LegendLeagueTournamentSeasonResult
+	LegendTrophies            int
 }

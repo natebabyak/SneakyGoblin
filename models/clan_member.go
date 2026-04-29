@@ -1,19 +1,19 @@
 package models
 
 type ClanMember struct {
-	league              League
-	leagueTier          LeagueTier
-	builderBaseLeague   BuilderBaseLeague
-	tag                 string
-	name                string
-	role                Role
-	townHallLevel       int
-	expLevel            int
-	clanRank            int
-	previousClanRank    int
-	donations           int
-	donationsReceived   int
-	trophies            int
-	builderBaseTrophies int
-	playerHouse         PlayerHouse
+	League              League
+	LeagueTier          LeagueTier
+	BuilderBaseLeague   BuilderBaseLeague
+	Tag                 string
+	Name                string
+	Role                Role
+	TownHallLevel       int
+	ExpLevel            int
+	ClanRank            int
+	PreviousClanRank    int
+	Donations           int
+	DonationsReceived   int
+	Trophies            int
+	BuilderBaseTrophies int
+	PlayerHouse         PlayerHouse
 }

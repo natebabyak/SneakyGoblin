@@ -1,11 +1,11 @@
 package models
 
 type PlayerAchievementProgress struct {
-	stars          int
-	value          int
-	name           string
-	target         int
-	info           string
-	completionInfo string
-	village        Village
+	Stars          int
+	Value          int
+	Name           string
+	Target         int
+	Info           string
+	CompletionInfo string
+	Village        Village
 }

@@ -1,6 +1,6 @@
 package models
 
 type WarLeague struct {
-	name string
-	id   int
+	Name string
+	Id   int
 }

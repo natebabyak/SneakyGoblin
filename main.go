@@ -10,7 +10,7 @@ import (
 )
 
 var (
-	// apiToken string
+	apiToken string
 	botToken string
 )
 
@@ -20,7 +20,7 @@ func init() {
 		log.Fatal("Error loading .env file")
 	}
 
-	// apiToken = os.Getenv("API_TOKEN")
+	apiToken = os.Getenv("API_TOKEN")
 	botToken = os.Getenv("BOT_TOKEN")
 }
 

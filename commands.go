@@ -12,7 +12,7 @@ var (
 					Type:        discordgo.ApplicationCommandOptionString,
 					Name:        "clan-tag",
 					Description: "The clan's tag.",
-					Required:    false,
+					Required:    true,
 				},
 			},
 		},
@@ -62,10 +62,19 @@ var (
 
 	CommandHandlers = map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate){
 		"clan": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+			options := i.ApplicationCommandData().Options
+			clanTag := options[0].Value.(string)
+			clan := GetClanByTag(clanTag)
+
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "clan",
+					Embeds: []*discordgo.MessageEmbed{
+						{
+							Title:       clan.Name,
+							Description: clan.Description,
+						},
+					},
 				},
 			})
 		},

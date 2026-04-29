@@ -1,10 +1,10 @@
 package models
 
 type League struct {
-	name     string
-	id       int
-	iconUrls struct {
-		small string
-		tiny  string
+	Name     string
+	Id       int
+	IconUrls struct {
+		Small string
+		Tiny  string
 	}
 }

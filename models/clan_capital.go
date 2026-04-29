@@ -1,6 +1,6 @@
 package models
 
 type ClanCapital struct {
-	capitalHallLevel int
-	districts        []ClanDistrictData
+	CapitalHallLevel int
+	Districts        []ClanDistrictData
 }

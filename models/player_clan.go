@@ -1,12 +1,12 @@
 package models
 
 type PlayerClan struct {
-	tag       string
-	clanLevel int
-	name      string
-	badgeUrls struct {
-		small  string
-		large  string
-		medium string
+	Tag       string
+	ClanLevel int
+	Name      string
+	BadgeUrls struct {
+		Small  string
+		Large  string
+		Medium string
 	}
 }

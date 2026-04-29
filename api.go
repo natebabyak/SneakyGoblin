@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
 	"log"
+	"main/models"
 	"net/http"
 	"net/url"
 	"os"
@@ -32,7 +34,7 @@ func formatTag(tag string) string {
 	}
 }
 
-func Get(url string) any {
+func Get(url string) []byte {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		log.Fatal(err)
@@ -60,10 +62,22 @@ func Get(url string) any {
 
 const baseUrl = "https://api.clashofclans.com/v1/"
 
-func GetClanByTag(tag string) any {
-	return Get(baseUrl + formatTag(tag))
+func GetClanByTag(tag string) models.Clan {
+	data := Get(baseUrl + "clans/" + formatTag(tag))
+	var clan models.Clan
+	if err := json.Unmarshal(data, &clan); err != nil {
+		log.Println("failed to parse clan response:", err)
+		return models.Clan{}
+	}
+	return clan
 }
 
-func GetPlayerByTag(tag string) Player {
-	return Get(baseUrl + formatTag(tag)).(Player)
+func GetPlayerByTag(tag string) models.Player {
+	data := Get(baseUrl + "players/" + formatTag(tag))
+	var player models.Player
+	if err := json.Unmarshal(data, &player); err != nil {
+		log.Println("failed to parse player response:", err)
+		return models.Player{}
+	}
+	return player
 }
