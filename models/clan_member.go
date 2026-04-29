@@ -6,7 +6,7 @@ type ClanMember struct {
 	builderBaseLeague   BuilderBaseLeague
 	tag                 string
 	name                string
-	role                string
+	role                Role
 	townHallLevel       int
 	expLevel            int
 	clanRank            int
