@@ -1,6 +1,10 @@
 package main
 
-import "github.com/bwmarrin/discordgo"
+import (
+	"main/api"
+
+	"github.com/bwmarrin/discordgo"
+)
 
 var (
 	Commands = []*discordgo.ApplicationCommand{
@@ -64,7 +68,7 @@ var (
 		"clan": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
 			options := i.ApplicationCommandData().Options
 			clanTag := options[0].Value.(string)
-			clan := GetClanByTag(clanTag)
+			clan := api.GetClanByTag(clanTag)
 
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
@@ -79,18 +83,36 @@ var (
 			})
 		},
 		"help": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+			options := i.ApplicationCommandData().Options
+			optionMap := make(map[string]*discordgo.ApplicationCommandInteractionDataOption, len(options))
+			for _, opt := range options {
+				optionMap[opt.Name] = opt
+			}
+
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "help",
+					Embeds: []*discordgo.MessageEmbed{
+						{
+							Title: "Commands",
+						},
+					},
 				},
 			})
 		},
 		"player": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+			options := i.ApplicationCommandData().Options
+			playerTag := options[0].Value.(string)
+			player := api.GetPlayerByTag(playerTag)
+
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
 				Data: &discordgo.InteractionResponseData{
-					Content: "player",
+					Embeds: []*discordgo.MessageEmbed{
+						{
+							Title: player.Name,
+						},
+					},
 				},
 			})
 		},

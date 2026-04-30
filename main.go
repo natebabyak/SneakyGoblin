@@ -5,13 +5,18 @@ import (
 	"os"
 	"os/signal"
 
+	"main/api"
+
 	"github.com/bwmarrin/discordgo"
 	"github.com/joho/godotenv"
 )
 
 var (
-	apiToken string
-	botToken string
+	cocToken             string
+	discordToken         string
+	discordApplicationId string
+	discordPublicKey     string
+	discordGuildID       string
 )
 
 func init() {
@@ -20,15 +25,18 @@ func init() {
 		log.Fatal("Error loading .env file")
 	}
 
-	apiToken = os.Getenv("API_TOKEN")
-	botToken = os.Getenv("BOT_TOKEN")
+	cocToken = os.Getenv("COC_TOKEN")
+	discordToken = os.Getenv("DISCORD_TOKEN")
+	discordApplicationId = os.Getenv("DISCORD_APPLICATION_ID")
+	discordPublicKey = os.Getenv("DISCORD_PUBLIC_KEY")
+	discordGuildID = os.Getenv("DISCORD_GUILD_ID")
+	api.Init(cocToken)
 }
 
 func main() {
-	s, err := discordgo.New("Bot " + botToken)
+	s, err := discordgo.New("Bot " + discordToken)
 	if err != nil {
 		log.Fatal(err)
-		return
 	}
 
 	s.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
@@ -41,30 +49,34 @@ func main() {
 	if err != nil {
 		log.Fatal("error opening connection:", err)
 	}
+	defer s.Close()
 
-	registeredCommands := make([]*discordgo.ApplicationCommand, len(Commands))
-	for i, v := range Commands {
-		cmd, err := s.ApplicationCommandCreate(s.State.User.ID, v.GuildID, v)
-		if err != nil {
-			log.Panicf("Cannot create '%v' command: %v", v.Name, err)
-		}
-		registeredCommands[i] = cmd
+	appID := discordApplicationId
+	if appID == "" {
+		appID = s.State.User.ID
 	}
 
-	defer s.Close()
+	if discordGuildID == "" {
+		log.Fatal("DISCORD_GUILD_ID is required: set it to your dev server ID for guild-scoped slash commands")
+	}
+
+	_, err = s.ApplicationCommandBulkOverwrite(appID, discordGuildID, Commands)
+	if err != nil {
+		log.Fatalf("slash command bulk overwrite (guild %s): %v", discordGuildID, err)
+	}
+	log.Printf("registered %d slash command(s) on guild %s", len(Commands), discordGuildID)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt)
 	log.Println("Press Ctrl+C to exit")
 	<-stop
 
-	for _, v := range registeredCommands {
-		err := s.ApplicationCommandDelete(s.State.User.ID, v.GuildID, v.ID)
-		if err != nil {
-			log.Panicf("Cannot delete '%v' command: %v", v.Name, err)
-		}
+	_, err = s.ApplicationCommandBulkOverwrite(appID, discordGuildID, []*discordgo.ApplicationCommand{})
+	if err != nil {
+		log.Printf("warning: clear guild slash commands: %v", err)
+	} else {
+		log.Println("cleared guild slash commands")
 	}
 
 	log.Println("Gracefully shutting down.")
-
 }
