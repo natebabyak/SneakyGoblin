@@ -1,6 +1,7 @@
-package api
+package main
 
 import (
+	"encoding/json"
 	"io"
 	"log"
 	"net/http"
@@ -14,10 +15,6 @@ var (
 	httpClient = &http.Client{Timeout: 10 * time.Second}
 	token      string
 )
-
-func Init(bearerToken string) {
-	token = bearerToken
-}
 
 func formatTag(tag string) string {
 	if tag == "" {
@@ -50,4 +47,24 @@ func get(rawURL string) []byte {
 	}
 
 	return data
+}
+
+func getClanByTag(tag string) Clan {
+	data := get(baseURL + "clans/" + formatTag(tag))
+	var clan Clan
+	if err := json.Unmarshal(data, &clan); err != nil {
+		log.Println("failed to parse clan response:", err)
+		return Clan{}
+	}
+	return clan
+}
+
+func getPlayerByTag(tag string) Player {
+	data := get(baseURL + "players/" + formatTag(tag))
+	var player Player
+	if err := json.Unmarshal(data, &player); err != nil {
+		log.Println("failed to parse player response:", err)
+		return Player{}
+	}
+	return player
 }

@@ -1,8 +1,6 @@
 package main
 
 import (
-	"main/api"
-
 	"github.com/bwmarrin/discordgo"
 )
 
@@ -68,7 +66,7 @@ var (
 		"clan": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
 			options := i.ApplicationCommandData().Options
 			clanTag := options[0].Value.(string)
-			clan := api.GetClanByTag(clanTag)
+			clan := getClanByTag(clanTag)
 
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
@@ -103,7 +101,7 @@ var (
 		"player": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
 			options := i.ApplicationCommandData().Options
 			playerTag := options[0].Value.(string)
-			player := api.GetPlayerByTag(playerTag)
+			player := getPlayerByTag(playerTag)
 
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,

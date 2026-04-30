@@ -5,8 +5,6 @@ import (
 	"os"
 	"os/signal"
 
-	"main/api"
-
 	"github.com/bwmarrin/discordgo"
 	"github.com/joho/godotenv"
 )
@@ -30,7 +28,6 @@ func init() {
 	discordApplicationId = os.Getenv("DISCORD_APPLICATION_ID")
 	discordPublicKey = os.Getenv("DISCORD_PUBLIC_KEY")
 	discordGuildID = os.Getenv("DISCORD_GUILD_ID")
-	api.Init(cocToken)
 }
 
 func main() {
