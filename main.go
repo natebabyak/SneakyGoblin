@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/joho/godotenv"
@@ -23,7 +24,7 @@ func init() {
 		log.Fatal("Error loading .env file")
 	}
 
-	cocToken = os.Getenv("COC_TOKEN")
+	cocToken = strings.TrimSpace(os.Getenv("COC_TOKEN"))
 	discordToken = os.Getenv("DISCORD_TOKEN")
 	discordApplicationId = os.Getenv("DISCORD_APPLICATION_ID")
 	discordPublicKey = os.Getenv("DISCORD_PUBLIC_KEY")
@@ -37,6 +38,13 @@ func main() {
 	}
 
 	s.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		if i.Type == discordgo.InteractionApplicationCommandAutocomplete {
+			if h, ok := CommandAutocompleteHandlers[i.ApplicationCommandData().Name]; ok {
+				h(s, i)
+			}
+			return
+		}
+
 		if h, ok := CommandHandlers[i.ApplicationCommandData().Name]; ok {
 			h(s, i)
 		}
