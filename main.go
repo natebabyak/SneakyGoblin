@@ -32,6 +32,8 @@ func init() {
 }
 
 func main() {
+	initDb()
+
 	s, err := discordgo.New("Bot " + discordToken)
 	if err != nil {
 		log.Fatal(err)
@@ -65,23 +67,24 @@ func main() {
 		log.Fatal("DISCORD_GUILD_ID is required: set it to your dev server ID for guild-scoped slash commands")
 	}
 
+	// Clear global commands so only dev-guild commands from this project are visible.
+	_, err = s.ApplicationCommandBulkOverwrite(appID, "", []*discordgo.ApplicationCommand{})
+	if err != nil {
+		log.Printf("warning: clear global slash commands: %v", err)
+	} else {
+		log.Println("cleared global slash commands")
+	}
+
 	_, err = s.ApplicationCommandBulkOverwrite(appID, discordGuildID, Commands)
 	if err != nil {
 		log.Fatalf("slash command bulk overwrite (guild %s): %v", discordGuildID, err)
 	}
-	log.Printf("registered %d slash command(s) on guild %s", len(Commands), discordGuildID)
+	log.Printf("synced %d slash command(s) on guild %s", len(Commands), discordGuildID)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt)
 	log.Println("Press Ctrl+C to exit")
 	<-stop
-
-	_, err = s.ApplicationCommandBulkOverwrite(appID, discordGuildID, []*discordgo.ApplicationCommand{})
-	if err != nil {
-		log.Printf("warning: clear guild slash commands: %v", err)
-	} else {
-		log.Println("cleared guild slash commands")
-	}
 
 	log.Println("Gracefully shutting down.")
 }
