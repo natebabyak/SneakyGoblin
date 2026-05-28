@@ -54,6 +54,27 @@ func main() {
 			return
 		}
 
+		if i.Type == discordgo.InteractionMessageComponent {
+			customID := i.MessageComponentData().CustomID
+			switch {
+			case strings.HasPrefix(customID, clanMemSortPrefix):
+				handleClanMembersSortSelect(s, i)
+			case strings.HasPrefix(customID, clanMemPrefix):
+				handleClanMembersButton(s, i)
+			case strings.HasPrefix(customID, clanWarSortPrefix):
+				handleClanWarSortSelect(s, i)
+			case strings.HasPrefix(customID, clanWarPrefix):
+				handleClanWarButton(s, i)
+			case strings.HasPrefix(customID, clanTabPrefix):
+				handleClanTabButton(s, i)
+			case strings.HasPrefix(customID, playerAchSortPrefix):
+				handlePlayerAchievementsSortSelect(s, i)
+			case strings.HasPrefix(customID, playerAchPrefix):
+				handlePlayerAchievementsButton(s, i)
+			}
+			return
+		}
+
 		if h, ok := CommandHandlers[i.ApplicationCommandData().Name]; ok {
 			h(s, i)
 		}

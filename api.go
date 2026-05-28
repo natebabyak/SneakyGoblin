@@ -129,6 +129,108 @@ func getClanByTag(tag string) APIResult[Clan] {
 	return APIResult[Clan]{Data: clan, OK: true, StatusCode: statusCode}
 }
 
+type clanMembersResponse struct {
+	Items []ClanMember `json:"items"`
+}
+
+type warSnapshot struct {
+	Name                  string  `json:"name"`
+	Tag                   string  `json:"tag"`
+	Stars                 int     `json:"stars"`
+	DestructionPercentage float64 `json:"destructionPercentage"`
+	Attacks               int     `json:"attacks"`
+	ClanLevel             int     `json:"clanLevel"`
+}
+
+type warLogEntry struct {
+	Result   string      `json:"result"`
+	EndTime  string      `json:"endTime"`
+	TeamSize int         `json:"teamSize"`
+	Clan     warSnapshot `json:"clan"`
+	Opponent warSnapshot `json:"opponent"`
+}
+
+type warLogResponse struct {
+	Items []warLogEntry `json:"items"`
+}
+
+type currentWarResponse struct {
+	State     string      `json:"state"`
+	TeamSize  int         `json:"teamSize"`
+	Clan      warSnapshot `json:"clan"`
+	Opponent  warSnapshot `json:"opponent"`
+	StartTime string      `json:"startTime"`
+	EndTime   string      `json:"endTime"`
+}
+
+func getClanMembers(tag string) APIResult[[]ClanMember] {
+	data, statusCode, reason, ok := get(baseURL + "clans/" + formatTag(tag) + "/members")
+	if !ok {
+		return APIResult[[]ClanMember]{OK: false, StatusCode: statusCode, Error: reason}
+	}
+
+	var members clanMembersResponse
+	if err := json.Unmarshal(data, &members); err != nil {
+		log.Println("failed to parse clan members response:", err)
+		return APIResult[[]ClanMember]{OK: false, StatusCode: statusCode, Error: "failed to parse clan members response"}
+	}
+	for i := range members.Items {
+		patchClanMemberFields(data, &members.Items[i], i)
+	}
+	return APIResult[[]ClanMember]{Data: members.Items, OK: true, StatusCode: statusCode}
+}
+
+func patchClanMemberFields(data []byte, member *ClanMember, index int) {
+	var payload struct {
+		Items []struct {
+			Tag        string `json:"tag"`
+			League     League `json:"league"`
+			LeagueTier LeagueTier `json:"leagueTier"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil || index >= len(payload.Items) {
+		return
+	}
+	item := payload.Items[index]
+	if strings.TrimSpace(member.Tag) == "" {
+		member.Tag = item.Tag
+	}
+	if member.League.Name == "" && member.League.Id == 0 {
+		member.League = item.League
+	}
+	if member.LeagueTier.Name == "" && member.LeagueTier.Id == 0 {
+		member.LeagueTier = item.LeagueTier
+	}
+}
+
+func getClanWarLog(tag string) APIResult[[]warLogEntry] {
+	data, statusCode, reason, ok := get(baseURL + "clans/" + formatTag(tag) + "/warlog")
+	if !ok {
+		return APIResult[[]warLogEntry]{OK: false, StatusCode: statusCode, Error: reason}
+	}
+
+	var warLog warLogResponse
+	if err := json.Unmarshal(data, &warLog); err != nil {
+		log.Println("failed to parse clan war log response:", err)
+		return APIResult[[]warLogEntry]{OK: false, StatusCode: statusCode, Error: "failed to parse clan war log response"}
+	}
+	return APIResult[[]warLogEntry]{Data: warLog.Items, OK: true, StatusCode: statusCode}
+}
+
+func getClanCurrentWar(tag string) APIResult[currentWarResponse] {
+	data, statusCode, reason, ok := get(baseURL + "clans/" + formatTag(tag) + "/currentwar")
+	if !ok {
+		return APIResult[currentWarResponse]{OK: false, StatusCode: statusCode, Error: reason}
+	}
+
+	var war currentWarResponse
+	if err := json.Unmarshal(data, &war); err != nil {
+		log.Println("failed to parse current war response:", err)
+		return APIResult[currentWarResponse]{OK: false, StatusCode: statusCode, Error: "failed to parse current war response"}
+	}
+	return APIResult[currentWarResponse]{Data: war, OK: true, StatusCode: statusCode}
+}
+
 func getPlayerByTag(tag string) APIResult[Player] {
 	data, statusCode, reason, ok := get(baseURL + "players/" + formatTag(tag))
 	if !ok {

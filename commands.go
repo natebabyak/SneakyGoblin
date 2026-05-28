@@ -2,7 +2,9 @@ package main
 
 import (
 	"fmt"
+	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,11 +20,41 @@ const (
 	verifyTokenModalPrefix = "verify:verify:"
 	verifyTokenInputID     = "token"
 	botWatermark           = "SneakyGoblin"
-	embedColorClan         = 0xF1C40F
-	embedColorPlayer       = 0xE67E22
-	embedColorSuccess      = 0x2ECC71
-	embedColorHelp         = 0x5865F2
+	embedColor             = 0x00C950
+	clanTabPrefix          = "clan-tab:"
+	clanTabOverview        = "overview"
+	clanTabMembers         = "members"
+	clanTabWars            = "wars"
+	clanTabCapital         = "capital"
+	clanMemPrefix          = "clan-mem:"
+	clanMemSortPrefix      = "clan-mem-sort:"
+	clanWarPrefix          = "clan-war:"
+	clanWarSortPrefix      = "clan-war-sort:"
+	clanMembersPerPage     = 15
+	clanWarsPerPage        = 15
+	clanMemberDefaultSort  = "league-trophies"
+	clanWarDefaultSort        = "date"
+	playerAchPrefix           = "player-ach:"
+	playerAchSortPrefix       = "player-ach-sort:"
+	playerAchievementsPerPage = 15
+	playerAchDefaultSort      = "default"
 )
+
+type clanPanelState struct {
+	memPage, memTotalPages int
+	memSort                string
+	warPage, warTotalPages int
+	warSort                string
+}
+
+func defaultClanPanelState() clanPanelState {
+	return clanPanelState{
+		memSort:       clanMemberDefaultSort,
+		warSort:       clanWarDefaultSort,
+		memTotalPages: 1,
+		warTotalPages: 1,
+	}
+}
 
 var botAvatarURL string
 
@@ -181,7 +213,6 @@ func handleVerifyTokenModalSubmit(s *discordgo.Session, i *discordgo.Interaction
 			playerResult.Data.Name,
 			embedDescriptionWithTag(playerResult.Data.Tag, "Verified and linked to your Discord account."),
 			playerThumbnailURL(playerResult.Data),
-			embedColorSuccess,
 		),
 	)
 }
@@ -215,8 +246,8 @@ func statsEmbedFooter() *discordgo.MessageEmbedFooter {
 	return footer
 }
 
-func withStatsEmbed(embed *discordgo.MessageEmbed, thumbnailURL string, color int) *discordgo.MessageEmbed {
-	embed.Color = color
+func withStatsEmbed(embed *discordgo.MessageEmbed, thumbnailURL string) *discordgo.MessageEmbed {
+	embed.Color = embedColor
 	embed.Footer = statsEmbedFooter()
 	if thumbnailURL != "" {
 		embed.Thumbnail = &discordgo.MessageEmbedThumbnail{URL: thumbnailURL}
@@ -225,7 +256,42 @@ func withStatsEmbed(embed *discordgo.MessageEmbed, thumbnailURL string, color in
 }
 
 func tagSubheading(tag string) string {
-	return "## " + normalizeTag(tag)
+	return "-# " + normalizeTag(tag)
+}
+
+func formatCompactNumber(n int) string {
+	abs := n
+	sign := ""
+	if n < 0 {
+		sign = "-"
+		abs = -n
+	}
+	if abs < 1000 {
+		return sign + strconv.Itoa(n)
+	}
+
+	type scale struct {
+		div    float64
+		suffix string
+	}
+	for _, s := range []scale{{1e9, "B"}, {1e6, "M"}, {1e3, "K"}} {
+		if float64(abs) >= s.div {
+			return sign + formatWithSigFigs(float64(abs)/s.div, 3) + s.suffix
+		}
+	}
+	return sign + strconv.Itoa(n)
+}
+
+func formatWithSigFigs(v float64, sig int) string {
+	if v == 0 {
+		return "0"
+	}
+	magnitude := int(math.Floor(math.Log10(v)))
+	decimals := sig - 1 - magnitude
+	if decimals < 0 {
+		decimals = 0
+	}
+	return strconv.FormatFloat(v, 'f', decimals, 64)
 }
 
 func embedDescriptionWithTag(tag, body string) string {
@@ -266,11 +332,11 @@ func playerThumbnailURL(player Player) string {
 	return player.Player.BadgeUrls.Large
 }
 
-func buildStatusEmbed(title, description, thumbnailURL string, color int) *discordgo.MessageEmbed {
+func buildStatusEmbed(title, description, thumbnailURL string) *discordgo.MessageEmbed {
 	return withStatsEmbed(&discordgo.MessageEmbed{
 		Title:       title,
 		Description: description,
-	}, thumbnailURL, color)
+	}, thumbnailURL)
 }
 
 func playerSubcommand(name, description string) *discordgo.ApplicationCommandOption {
@@ -445,9 +511,1039 @@ func buildClanOverviewEmbed(clan Clan) *discordgo.MessageEmbed {
 			{Name: "Location", Value: clan.Location.Name, Inline: true},
 			{Name: "Type", Value: string(clan.Type), Inline: true},
 			{Name: "War Win Streak", Value: fmt.Sprintf("%d", clan.WarWinStreak), Inline: true},
+			{Name: "War League", Value: clan.WarLeague.Name, Inline: true},
+			{Name: "Capital League", Value: clan.CapitalLeague.Name, Inline: true},
+			{Name: "Builder Base", Value: fmt.Sprintf("%d", clan.ClanBuilderBasePoints), Inline: true},
+			{Name: "War Log Public", Value: boolString(clan.IsWarLogPublic), Inline: true},
+			{Name: "Family Friendly", Value: boolString(clan.IsFamilyFriendly), Inline: true},
+			{Name: "Chat Language", Value: clan.ChatLanguage.Name, Inline: true},
 			{Name: "Labels", Value: strings.Join(labels, ", ")},
 		},
-	}, clanBadgeURL(clan), embedColorClan)
+	}, clanBadgeURL(clan))
+}
+
+func boolString(v bool) string {
+	if v {
+		return "Yes"
+	}
+	return "No"
+}
+
+func clanTabButtonID(tab, tag string) string {
+	return clanTabPrefix + tab + ":" + strings.TrimPrefix(normalizeTag(tag), "#")
+}
+
+func parseClanTabButtonID(customID string) (tab, tag string, ok bool) {
+	if !strings.HasPrefix(customID, clanTabPrefix) {
+		return "", "", false
+	}
+	rest := strings.TrimPrefix(customID, clanTabPrefix)
+	parts := strings.SplitN(rest, ":", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return parts[0], normalizeTag(parts[1]), true
+}
+
+var clanMemberSorts = []struct {
+	key   string
+	label string
+}{
+	{key: "league-trophies", label: "League & Trophies"},
+	{key: "trophies", label: "Trophies"},
+	{key: "th", label: "Town Hall"},
+	{key: "role", label: "Role"},
+	{key: "donations", label: "Troops Donated"},
+	{key: "received", label: "Troops Received"},
+	{key: "exp", label: "XP Level"},
+	{key: "bb-trophies", label: "Builder Trophies"},
+}
+
+func normalizeClanMemberSort(sort string) string {
+	if sort == "league" {
+		return clanMemberDefaultSort
+	}
+	if isValidClanMemberSort(sort) {
+		return sort
+	}
+	return clanMemberDefaultSort
+}
+
+func clanTabComponents(clanTag, activeTab string) []discordgo.MessageComponent {
+	tabs := []struct {
+		id    string
+		label string
+	}{
+		{clanTabOverview, "Overview"},
+		{clanTabMembers, "Members"},
+		{clanTabWars, "Wars"},
+		{clanTabCapital, "Clan Capital"},
+	}
+	buttons := make([]discordgo.MessageComponent, 0, len(tabs))
+	for _, tab := range tabs {
+		buttons = append(buttons, discordgo.Button{
+			Label:    tab.label,
+			Style:    discordgo.SecondaryButton,
+			CustomID: clanTabButtonID(tab.id, clanTag),
+			Disabled: tab.id == activeTab,
+		})
+	}
+	return []discordgo.MessageComponent{discordgo.ActionsRow{Components: buttons}}
+}
+
+func clanMemButtonID(action, tag, sort string, page int) string {
+	return fmt.Sprintf("%s%s:%s:%d:%s", clanMemPrefix, action, strings.TrimPrefix(normalizeTag(tag), "#"), page, sort)
+}
+
+func parseClanMemButtonID(customID string) (action, tag, sort string, page int, ok bool) {
+	if !strings.HasPrefix(customID, clanMemPrefix) {
+		return "", "", "", 0, false
+	}
+	parts := strings.Split(strings.TrimPrefix(customID, clanMemPrefix), ":")
+	if len(parts) != 4 {
+		return "", "", "", 0, false
+	}
+	action = parts[0]
+	if action != "p" && action != "n" {
+		return "", "", "", 0, false
+	}
+	page, err := strconv.Atoi(parts[2])
+	if err != nil || page < 0 {
+		return "", "", "", 0, false
+	}
+	sort = normalizeClanMemberSort(parts[3])
+	return action, normalizeTag(parts[1]), sort, page, true
+}
+
+func isValidClanMemberSort(sort string) bool {
+	for _, option := range clanMemberSorts {
+		if option.key == sort {
+			return true
+		}
+	}
+	return false
+}
+
+func clanMemberSortLabel(sort string) string {
+	for _, option := range clanMemberSorts {
+		if option.key == sort {
+			return option.label
+		}
+	}
+	return "League & Trophies"
+}
+
+func memberLeagueSortKey(member ClanMember) int {
+	if member.LeagueTier.Id > 0 {
+		return member.LeagueTier.Id
+	}
+	return member.League.Id
+}
+
+func memberLeagueName(member ClanMember) string {
+	if member.LeagueTier.Name != "" {
+		return member.LeagueTier.Name
+	}
+	if member.League.Name != "" {
+		return member.League.Name
+	}
+	return "Unranked"
+}
+
+func stripLeagueWordFromName(name string) string {
+	name = strings.TrimSpace(name)
+	name = strings.ReplaceAll(name, " League ", " ")
+	name = strings.ReplaceAll(name, " league ", " ")
+	name = strings.TrimSuffix(name, " League")
+	name = strings.TrimSuffix(name, " league")
+	return strings.TrimSpace(name)
+}
+
+func roleSortRank(role Role) int {
+	switch strings.ToLower(string(role)) {
+	case "leader":
+		return 0
+	case "coleader":
+		return 1
+	case "admin", "elder":
+		return 2
+	case "member":
+		return 3
+	default:
+		return 4
+	}
+}
+
+func sortClanMembers(members []ClanMember, sortKey string) {
+	sortKey = normalizeClanMemberSort(sortKey)
+	tieTrophies := func(i, j int) bool {
+		if members[i].Trophies != members[j].Trophies {
+			return members[i].Trophies > members[j].Trophies
+		}
+		return members[i].ClanRank < members[j].ClanRank
+	}
+
+	switch sortKey {
+	case "trophies":
+		sort.Slice(members, func(i, j int) bool {
+			if members[i].Trophies != members[j].Trophies {
+				return members[i].Trophies > members[j].Trophies
+			}
+			if memberLeagueSortKey(members[i]) != memberLeagueSortKey(members[j]) {
+				return memberLeagueSortKey(members[i]) > memberLeagueSortKey(members[j])
+			}
+			return members[i].ClanRank < members[j].ClanRank
+		})
+	case "th":
+		sort.Slice(members, func(i, j int) bool {
+			if members[i].TownHallLevel != members[j].TownHallLevel {
+				return members[i].TownHallLevel > members[j].TownHallLevel
+			}
+			return tieTrophies(i, j)
+		})
+	case "role":
+		sort.Slice(members, func(i, j int) bool {
+			ri, rj := roleSortRank(members[i].Role), roleSortRank(members[j].Role)
+			if ri != rj {
+				return ri < rj
+			}
+			return tieTrophies(i, j)
+		})
+	case "donations":
+		sort.Slice(members, func(i, j int) bool {
+			if members[i].Donations != members[j].Donations {
+				return members[i].Donations > members[j].Donations
+			}
+			return tieTrophies(i, j)
+		})
+	case "received":
+		sort.Slice(members, func(i, j int) bool {
+			if members[i].DonationsReceived != members[j].DonationsReceived {
+				return members[i].DonationsReceived > members[j].DonationsReceived
+			}
+			return tieTrophies(i, j)
+		})
+	case "exp":
+		sort.Slice(members, func(i, j int) bool {
+			if members[i].ExpLevel != members[j].ExpLevel {
+				return members[i].ExpLevel > members[j].ExpLevel
+			}
+			return tieTrophies(i, j)
+		})
+	case "bb-trophies":
+		sort.Slice(members, func(i, j int) bool {
+			if members[i].BuilderBaseTrophies != members[j].BuilderBaseTrophies {
+				return members[i].BuilderBaseTrophies > members[j].BuilderBaseTrophies
+			}
+			return tieTrophies(i, j)
+		})
+	default:
+		sort.Slice(members, func(i, j int) bool {
+			li, lj := memberLeagueSortKey(members[i]), memberLeagueSortKey(members[j])
+			if li != lj {
+				return li > lj
+			}
+			if members[i].Trophies != members[j].Trophies {
+				return members[i].Trophies > members[j].Trophies
+			}
+			return members[i].ClanRank < members[j].ClanRank
+		})
+	}
+}
+
+func formatClanMemberSortMetric(member ClanMember, sortKey string) string {
+	switch normalizeClanMemberSort(sortKey) {
+	case "trophies":
+		return fmt.Sprintf("`%d`", member.Trophies)
+	case "th":
+		return fmt.Sprintf("`%d`", member.TownHallLevel)
+	case "role":
+		return formatClanMemberRole(member.Role)
+	case "donations":
+		return fmt.Sprintf("`%d`", member.Donations)
+	case "received":
+		return fmt.Sprintf("`%d`", member.DonationsReceived)
+	case "exp":
+		return fmt.Sprintf("`%d`", member.ExpLevel)
+	case "bb-trophies":
+		return fmt.Sprintf("`%d`", member.BuilderBaseTrophies)
+	default:
+		return fmt.Sprintf("`%d`", member.Trophies)
+	}
+}
+
+func formatClanMemberLeagueTrophiesCell(member ClanMember) string {
+	return fmt.Sprintf("`%s` & `%d`", stripLeagueWordFromName(memberLeagueName(member)), member.Trophies)
+}
+
+func formatClanMemberIndexName(index int, name string) string {
+	return fmt.Sprintf("**%d.** %s", index, name)
+}
+
+func formatClanMemberTagCell(member ClanMember) string {
+	tag := normalizeTag(member.Tag)
+	if tag == "" {
+		tag = "#UNKNOWN"
+	}
+	return "`" + tag + "`"
+}
+
+func clanMemberColumnField(name string, lines []string) *discordgo.MessageEmbedField {
+	return &discordgo.MessageEmbedField{
+		Name:   name,
+		Value:  strings.Join(lines, "\n"),
+		Inline: true,
+	}
+}
+
+func clanMemberTableFields(pageMembers []ClanMember, sortKey string, startIndex int) []*discordgo.MessageEmbedField {
+	if len(pageMembers) == 0 {
+		return nil
+	}
+
+	sortKey = normalizeClanMemberSort(sortKey)
+	nameLines := make([]string, 0, len(pageMembers))
+	tagLines := make([]string, 0, len(pageMembers))
+	for i, member := range pageMembers {
+		idx := startIndex + i + 1
+		nameLines = append(nameLines, formatClanMemberIndexName(idx, member.Name))
+		tagLines = append(tagLines, formatClanMemberTagCell(member))
+	}
+
+	fields := []*discordgo.MessageEmbedField{
+		clanMemberColumnField("Clan Member", nameLines),
+		clanMemberColumnField("Tag", tagLines),
+	}
+
+	if sortKey == "league-trophies" {
+		rankLines := make([]string, 0, len(pageMembers))
+		for _, member := range pageMembers {
+			rankLines = append(rankLines, formatClanMemberLeagueTrophiesCell(member))
+		}
+		fields = append(fields, clanMemberColumnField(clanMemberSortLabel(sortKey), rankLines))
+		return fields
+	}
+
+	metricLines := make([]string, 0, len(pageMembers))
+	for _, member := range pageMembers {
+		metricLines = append(metricLines, formatClanMemberSortMetric(member, sortKey))
+	}
+	fields = append(fields, clanMemberColumnField(clanMemberSortLabel(sortKey), metricLines))
+	return fields
+}
+
+var clanWarSorts = []struct {
+	key   string
+	label string
+}{
+	{key: "date", label: "Date"},
+	{key: "result", label: "Result"},
+	{key: "opponent", label: "Opponent"},
+	{key: "stars", label: "Stars"},
+	{key: "destruction", label: "Destruction"},
+	{key: "size", label: "War Size"},
+}
+
+func normalizeClanWarSort(sort string) string {
+	if isValidClanWarSort(sort) {
+		return sort
+	}
+	return clanWarDefaultSort
+}
+
+func isValidClanWarSort(sort string) bool {
+	for _, option := range clanWarSorts {
+		if option.key == sort {
+			return true
+		}
+	}
+	return false
+}
+
+func clanWarSortLabel(sort string) string {
+	for _, option := range clanWarSorts {
+		if option.key == sort {
+			return option.label
+		}
+	}
+	return "Date"
+}
+
+func parseWarEndTime(raw string) time.Time {
+	if raw == "" {
+		return time.Time{}
+	}
+	for _, layout := range []string{"20060102T150405.000Z", "20060102T150405Z", time.RFC3339} {
+		if t, err := time.Parse(layout, raw); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
+}
+
+func formatWarEndTime(raw string) string {
+	t := parseWarEndTime(raw)
+	if t.IsZero() {
+		return raw
+	}
+	return t.Format("Jan 2, 2006")
+}
+
+func warResultSortRank(result string) int {
+	switch strings.ToLower(strings.TrimSpace(result)) {
+	case "win":
+		return 0
+	case "tie":
+		return 1
+	case "lose", "loss":
+		return 2
+	default:
+		return 3
+	}
+}
+
+func sortClanWarLog(entries []warLogEntry, sortKey string) {
+	sortKey = normalizeClanWarSort(sortKey)
+	tieDate := func(i, j int) bool {
+		ti, tj := parseWarEndTime(entries[i].EndTime), parseWarEndTime(entries[j].EndTime)
+		if !ti.Equal(tj) {
+			return ti.After(tj)
+		}
+		return entries[i].Opponent.Name < entries[j].Opponent.Name
+	}
+
+	switch sortKey {
+	case "result":
+		sort.Slice(entries, func(i, j int) bool {
+			ri, rj := warResultSortRank(entries[i].Result), warResultSortRank(entries[j].Result)
+			if ri != rj {
+				return ri < rj
+			}
+			return tieDate(i, j)
+		})
+	case "opponent":
+		sort.Slice(entries, func(i, j int) bool {
+			ni, nj := strings.ToLower(entries[i].Opponent.Name), strings.ToLower(entries[j].Opponent.Name)
+			if ni != nj {
+				return ni < nj
+			}
+			return tieDate(i, j)
+		})
+	case "stars":
+		sort.Slice(entries, func(i, j int) bool {
+			if entries[i].Clan.Stars != entries[j].Clan.Stars {
+				return entries[i].Clan.Stars > entries[j].Clan.Stars
+			}
+			return tieDate(i, j)
+		})
+	case "destruction":
+		sort.Slice(entries, func(i, j int) bool {
+			if entries[i].Clan.DestructionPercentage != entries[j].Clan.DestructionPercentage {
+				return entries[i].Clan.DestructionPercentage > entries[j].Clan.DestructionPercentage
+			}
+			return tieDate(i, j)
+		})
+	case "size":
+		sort.Slice(entries, func(i, j int) bool {
+			if entries[i].TeamSize != entries[j].TeamSize {
+				return entries[i].TeamSize > entries[j].TeamSize
+			}
+			return tieDate(i, j)
+		})
+	default:
+		sort.Slice(entries, func(i, j int) bool {
+			return tieDate(i, j)
+		})
+	}
+}
+
+func formatWarIndexResult(index int, entry warLogEntry) string {
+	label := strings.ToUpper(strings.TrimSpace(entry.Result))
+	if label == "" {
+		label = "—"
+	}
+	return fmt.Sprintf("**%d.** %s · `%d`v`%d`", index, label, entry.TeamSize, entry.TeamSize)
+}
+
+func formatWarMatchCell(entry warLogEntry) string {
+	return fmt.Sprintf(
+		"**%s**\n`%d` - `%d`⭐ · `%.0f`%% - `%.0f`%%",
+		entry.Opponent.Name,
+		entry.Clan.Stars, entry.Opponent.Stars,
+		entry.Clan.DestructionPercentage, entry.Opponent.DestructionPercentage,
+	)
+}
+
+func warLogOutcomeCounts(entries []warLogEntry) (wins, losses, ties int) {
+	for _, entry := range entries {
+		switch strings.ToLower(strings.TrimSpace(entry.Result)) {
+		case "win":
+			wins++
+		case "tie":
+			ties++
+		case "lose", "loss":
+			losses++
+		}
+	}
+	return wins, losses, ties
+}
+
+func clanWarTableFields(pageEntries []warLogEntry, startIndex int) []*discordgo.MessageEmbedField {
+	if len(pageEntries) == 0 {
+		return nil
+	}
+
+	resultLines := make([]string, 0, len(pageEntries))
+	matchLines := make([]string, 0, len(pageEntries))
+	endLines := make([]string, 0, len(pageEntries))
+	for i, entry := range pageEntries {
+		idx := startIndex + i + 1
+		resultLines = append(resultLines, formatWarIndexResult(idx, entry))
+		matchLines = append(matchLines, formatWarMatchCell(entry))
+		endLines = append(endLines, formatWarEndTime(entry.EndTime))
+	}
+
+	return []*discordgo.MessageEmbedField{
+		clanMemberColumnField("# · Result", resultLines),
+		clanMemberColumnField("Matchup", matchLines),
+		clanMemberColumnField("Ended", endLines),
+	}
+}
+
+func clanWarButtonID(action, tag, sort string, page int) string {
+	return fmt.Sprintf("%s%s:%s:%d:%s", clanWarPrefix, action, strings.TrimPrefix(normalizeTag(tag), "#"), page, sort)
+}
+
+func parseClanWarButtonID(customID string) (action, tag, sort string, page int, ok bool) {
+	if !strings.HasPrefix(customID, clanWarPrefix) {
+		return "", "", "", 0, false
+	}
+	parts := strings.Split(strings.TrimPrefix(customID, clanWarPrefix), ":")
+	if len(parts) != 4 {
+		return "", "", "", 0, false
+	}
+	action = parts[0]
+	if action != "p" && action != "n" {
+		return "", "", "", 0, false
+	}
+	page, err := strconv.Atoi(parts[2])
+	if err != nil || page < 0 {
+		return "", "", "", 0, false
+	}
+	sort = normalizeClanWarSort(parts[3])
+	return action, normalizeTag(parts[1]), sort, page, true
+}
+
+func clanWarSortSelectID(tag string, page int) string {
+	return fmt.Sprintf("%s%s:%d", clanWarSortPrefix, strings.TrimPrefix(normalizeTag(tag), "#"), page)
+}
+
+func parseClanWarSortSelectID(customID string) (tag string, page int, ok bool) {
+	if !strings.HasPrefix(customID, clanWarSortPrefix) {
+		return "", 0, false
+	}
+	parts := strings.Split(strings.TrimPrefix(customID, clanWarSortPrefix), ":")
+	if len(parts) != 2 {
+		return "", 0, false
+	}
+	page, err := strconv.Atoi(parts[1])
+	if err != nil || page < 0 {
+		return "", 0, false
+	}
+	return normalizeTag(parts[0]), page, true
+}
+
+func formatClanMemberRole(role Role) string {
+	switch strings.ToLower(string(role)) {
+	case "leader":
+		return "Leader"
+	case "coleader":
+		return "Co-leader"
+	case "admin", "elder":
+		return "Elder"
+	case "member":
+		return "Member"
+	default:
+		return "Member"
+	}
+}
+
+func clanMemSortSelectID(tag string, page int) string {
+	return fmt.Sprintf("%s%s:%d", clanMemSortPrefix, strings.TrimPrefix(normalizeTag(tag), "#"), page)
+}
+
+func parseClanMemSortSelectID(customID string) (tag string, page int, ok bool) {
+	if !strings.HasPrefix(customID, clanMemSortPrefix) {
+		return "", 0, false
+	}
+	parts := strings.Split(strings.TrimPrefix(customID, clanMemSortPrefix), ":")
+	if len(parts) != 2 {
+		return "", 0, false
+	}
+	page, err := strconv.Atoi(parts[1])
+	if err != nil || page < 0 {
+		return "", 0, false
+	}
+	return normalizeTag(parts[0]), page, true
+}
+
+func clanPanelComponents(clanTag, activeTab string, state clanPanelState) []discordgo.MessageComponent {
+	rows := clanTabComponents(clanTag, activeTab)
+	minValues := 1
+
+	switch activeTab {
+	case clanTabMembers:
+		state.memSort = normalizeClanMemberSort(state.memSort)
+		sortOptions := make([]discordgo.SelectMenuOption, 0, len(clanMemberSorts))
+		for _, option := range clanMemberSorts {
+			sortOptions = append(sortOptions, discordgo.SelectMenuOption{
+				Label:       option.label,
+				Value:       option.key,
+				Description: "Sort members by " + strings.ToLower(option.label),
+				Default:     state.memSort == option.key,
+			})
+		}
+		rows = append(rows, discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			discordgo.SelectMenu{
+				CustomID:    clanMemSortSelectID(clanTag, state.memPage),
+				Placeholder: "Sort by: " + clanMemberSortLabel(state.memSort),
+				MinValues:   &minValues,
+				MaxValues:   1,
+				Options:     sortOptions,
+			},
+		}})
+		rows = append(rows, discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			discordgo.Button{
+				Label:    "Previous",
+				Style:    discordgo.SecondaryButton,
+				CustomID: clanMemButtonID("p", clanTag, state.memSort, state.memPage),
+				Disabled: state.memPage <= 0,
+			},
+			discordgo.Button{
+				Label:    "Next",
+				Style:    discordgo.SecondaryButton,
+				CustomID: clanMemButtonID("n", clanTag, state.memSort, state.memPage),
+				Disabled: state.memPage >= state.memTotalPages-1,
+			},
+		}})
+	case clanTabWars:
+		state.warSort = normalizeClanWarSort(state.warSort)
+		sortOptions := make([]discordgo.SelectMenuOption, 0, len(clanWarSorts))
+		for _, option := range clanWarSorts {
+			sortOptions = append(sortOptions, discordgo.SelectMenuOption{
+				Label:       option.label,
+				Value:       option.key,
+				Description: "Sort wars by " + strings.ToLower(option.label),
+				Default:     state.warSort == option.key,
+			})
+		}
+		rows = append(rows, discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			discordgo.SelectMenu{
+				CustomID:    clanWarSortSelectID(clanTag, state.warPage),
+				Placeholder: "Sort by: " + clanWarSortLabel(state.warSort),
+				MinValues:   &minValues,
+				MaxValues:   1,
+				Options:     sortOptions,
+			},
+		}})
+		rows = append(rows, discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			discordgo.Button{
+				Label:    "Previous",
+				Style:    discordgo.SecondaryButton,
+				CustomID: clanWarButtonID("p", clanTag, state.warSort, state.warPage),
+				Disabled: state.warPage <= 0,
+			},
+			discordgo.Button{
+				Label:    "Next",
+				Style:    discordgo.SecondaryButton,
+				CustomID: clanWarButtonID("n", clanTag, state.warSort, state.warPage),
+				Disabled: state.warPage >= state.warTotalPages-1,
+			},
+		}})
+	}
+	return rows
+}
+
+func sendClanPanel(s *discordgo.Session, i *discordgo.InteractionCreate, embed *discordgo.MessageEmbed, clanTag, tab string, state clanPanelState, update bool) {
+	responseType := discordgo.InteractionResponseChannelMessageWithSource
+	if update {
+		responseType = discordgo.InteractionResponseUpdateMessage
+	}
+	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: responseType,
+		Data: &discordgo.InteractionResponseData{
+			Embeds:     []*discordgo.MessageEmbed{embed},
+			Components: clanPanelComponents(clanTag, tab, state),
+		},
+	})
+}
+
+func buildClanTabEmbed(clan Clan, tab string, state clanPanelState) (*discordgo.MessageEmbed, clanPanelState) {
+	switch tab {
+	case clanTabMembers:
+		embed, pages := buildClanMembersEmbed(clan, state.memPage, state.memSort)
+		state.memTotalPages = pages
+		return embed, state
+	case clanTabWars:
+		embed, pages := buildClanWarsEmbed(clan, state.warPage, state.warSort)
+		state.warTotalPages = pages
+		return embed, state
+	case clanTabCapital:
+		return buildClanCapitalEmbed(clan), state
+	default:
+		return buildClanOverviewEmbed(clan), state
+	}
+}
+
+func buildClanMembersEmbed(clan Clan, page int, sortKey string) (*discordgo.MessageEmbed, int) {
+	result := getClanMembers(clan.Tag)
+	if !result.OK {
+		return withStatsEmbed(&discordgo.MessageEmbed{
+			Title:       clan.Name,
+			Description: embedDescriptionWithTag(clan.Tag, "Could not load members: "+result.Error),
+		}, clanBadgeURL(clan)), 1
+	}
+
+	sortKey = normalizeClanMemberSort(sortKey)
+
+	members := append([]ClanMember(nil), result.Data...)
+	sortClanMembers(members, sortKey)
+
+	totalPages := (len(members) + clanMembersPerPage - 1) / clanMembersPerPage
+	if totalPages == 0 {
+		totalPages = 1
+	}
+	if page >= totalPages {
+		page = totalPages - 1
+	}
+	if page < 0 {
+		page = 0
+	}
+
+	start := page * clanMembersPerPage
+	end := start + clanMembersPerPage
+	if end > len(members) {
+		end = len(members)
+	}
+	pageMembers := members[start:end]
+
+	meta := fmt.Sprintf(
+		"### Members (%d)\n-# Sorted by %s · Page %d/%d",
+		len(members),
+		clanMemberSortLabel(sortKey),
+		page+1,
+		totalPages,
+	)
+	if len(pageMembers) == 0 {
+		meta += "\nNo members on this page."
+	}
+
+	return withStatsEmbed(&discordgo.MessageEmbed{
+		Title:       clan.Name,
+		Description: embedDescriptionWithTag(clan.Tag, meta),
+		Fields:      clanMemberTableFields(pageMembers, sortKey, start),
+	}, clanBadgeURL(clan)), totalPages
+}
+
+func formatWarSnapshot(snap warSnapshot) string {
+	return fmt.Sprintf(
+		"**%s** `%s` — `%d`⭐ · `%.0f`%% · `%d` attacks",
+		snap.Name, normalizeTag(snap.Tag), snap.Stars, snap.DestructionPercentage, snap.Attacks,
+	)
+}
+
+func buildClanWarsEmbed(clan Clan, page int, sortKey string) (*discordgo.MessageEmbed, int) {
+	sortKey = normalizeClanWarSort(sortKey)
+	sections := make([]string, 0, 4)
+
+	current := getClanCurrentWar(clan.Tag)
+	if current.OK {
+		w := current.Data
+		sections = append(sections,
+			"### Current War",
+			fmt.Sprintf("**State:** %s · **Size:** `%d`v`%d`", w.State, w.TeamSize, w.TeamSize),
+			formatWarSnapshot(w.Clan),
+			formatWarSnapshot(w.Opponent),
+		)
+	}
+
+	warLog := getClanWarLog(clan.Tag)
+	if !warLog.OK {
+		msg := "War log is private or unavailable."
+		if !clan.IsWarLogPublic {
+			msg = "This clan's war log is set to private."
+		} else if warLog.Error != "" {
+			msg = warLog.Error
+		}
+		if len(sections) == 0 {
+			sections = append(sections, msg)
+		} else {
+			sections = append(sections, "### War Log", msg)
+		}
+		return withStatsEmbed(&discordgo.MessageEmbed{
+			Title:       clan.Name,
+			Description: embedDescriptionWithTag(clan.Tag, strings.Join(sections, "\n")),
+		}, clanBadgeURL(clan)), 1
+	}
+
+	entries := append([]warLogEntry(nil), warLog.Data...)
+	sortClanWarLog(entries, sortKey)
+
+	totalPages := (len(entries) + clanWarsPerPage - 1) / clanWarsPerPage
+	if totalPages == 0 {
+		totalPages = 1
+	}
+	if page >= totalPages {
+		page = totalPages - 1
+	}
+	if page < 0 {
+		page = 0
+	}
+
+	start := page * clanWarsPerPage
+	end := start + clanWarsPerPage
+	if end > len(entries) {
+		end = len(entries)
+	}
+	pageEntries := entries[start:end]
+
+	meta := fmt.Sprintf(
+		"### War Log (%d)\n-# Sorted by %s · Page %d/%d",
+		len(entries),
+		clanWarSortLabel(sortKey),
+		page+1,
+		totalPages,
+	)
+	if len(pageEntries) == 0 {
+		meta += "\nNo war log entries."
+	}
+	wins, losses, ties := warLogOutcomeCounts(entries)
+	if wins+losses+ties > 0 {
+		sections = append(sections, fmt.Sprintf("-# Record — `%d` W · `%d` L · `%d` T", wins, losses, ties))
+	}
+	sections = append(sections, meta)
+
+	embed := withStatsEmbed(&discordgo.MessageEmbed{
+		Title:       clan.Name,
+		Description: embedDescriptionWithTag(clan.Tag, strings.Join(sections, "\n")),
+		Fields:      clanWarTableFields(pageEntries, start),
+	}, clanBadgeURL(clan))
+	return embed, totalPages
+}
+
+func buildClanCapitalEmbed(clan Clan) *discordgo.MessageEmbed {
+	capitalLeague := clan.CapitalLeague.Name
+	if capitalLeague == "" {
+		capitalLeague = "—"
+	}
+	warLeague := clan.WarLeague.Name
+	if warLeague == "" {
+		warLeague = "—"
+	}
+
+	fields := []*discordgo.MessageEmbedField{
+		{Name: "Capital Points", Value: fmt.Sprintf("%d", clan.ClanCapitalPoints), Inline: true},
+		{Name: "Builder Base Points", Value: fmt.Sprintf("%d", clan.ClanBuilderBasePoints), Inline: true},
+		{Name: "Capital League", Value: capitalLeague, Inline: true},
+		{Name: "War League", Value: warLeague, Inline: true},
+		{Name: "Capital Hall Level", Value: fmt.Sprintf("%d", clan.ClanCapital.DistrictHallLevel), Inline: true},
+	}
+	if clan.ClanCapital.Name != "" {
+		fields = append(fields, &discordgo.MessageEmbedField{
+			Name:  "Capital District",
+			Value: clan.ClanCapital.Name,
+		})
+	}
+
+	return withStatsEmbed(&discordgo.MessageEmbed{
+		Title:       clan.Name,
+		Description: embedDescriptionWithTag(clan.Tag, "### Clan Capital"),
+		Fields:      fields,
+	}, clanBadgeURL(clan))
+}
+
+func handleClanTabButton(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	tab, tag, ok := parseClanTabButtonID(i.MessageComponentData().CustomID)
+	if !ok {
+		return
+	}
+
+	result := getClanByTag(tag)
+	if !result.OK {
+		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseUpdateMessage,
+			Data: &discordgo.InteractionResponseData{
+				Embeds: []*discordgo.MessageEmbed{withStatsEmbed(&discordgo.MessageEmbed{
+					Title:       "Clan Unavailable",
+					Description: result.Error,
+				}, "")},
+				Components: clanPanelComponents(tag, tab, defaultClanPanelState()),
+			},
+		})
+		return
+	}
+
+	upsertKnownClan(result.Data)
+	state := defaultClanPanelState()
+	if tab == clanTabMembers {
+		state.memPage, state.memSort = 0, clanMemberDefaultSort
+	}
+	if tab == clanTabWars {
+		state.warPage, state.warSort = 0, clanWarDefaultSort
+	}
+	embed, state := buildClanTabEmbed(result.Data, tab, state)
+	sendClanPanel(s, i, embed, result.Data.Tag, tab, state, true)
+}
+
+func handleClanMembersButton(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	action, tag, sort, page, ok := parseClanMemButtonID(i.MessageComponentData().CustomID)
+	if !ok {
+		return
+	}
+
+	switch action {
+	case "p":
+		page--
+	case "n":
+		page++
+	}
+	if page < 0 {
+		page = 0
+	}
+
+	respondClanMembersPanel(s, i, tag, page, sort)
+}
+
+func handleClanMembersSortSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	tag, _, ok := parseClanMemSortSelectID(i.MessageComponentData().CustomID)
+	if !ok {
+		return
+	}
+
+	values := i.MessageComponentData().Values
+	if len(values) == 0 {
+		return
+	}
+
+	respondClanMembersPanel(s, i, tag, 0, normalizeClanMemberSort(values[0]))
+}
+
+func respondClanMembersPanel(s *discordgo.Session, i *discordgo.InteractionCreate, tag string, page int, sort string) {
+	if page < 0 {
+		page = 0
+	}
+
+	clanResult := getClanByTag(tag)
+	if !clanResult.OK {
+		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseUpdateMessage,
+			Data: &discordgo.InteractionResponseData{
+				Embeds: []*discordgo.MessageEmbed{withStatsEmbed(&discordgo.MessageEmbed{
+					Title:       "Clan Unavailable",
+					Description: clanResult.Error,
+				}, "")},
+				Components: clanPanelComponents(tag, clanTabMembers, clanPanelState{memSort: sort, memTotalPages: 1, warSort: clanWarDefaultSort, warTotalPages: 1}),
+			},
+		})
+		return
+	}
+
+	upsertKnownClan(clanResult.Data)
+	state := clanPanelState{memPage: page, memSort: sort, warSort: clanWarDefaultSort, memTotalPages: 1, warTotalPages: 1}
+	embed, state := buildClanTabEmbed(clanResult.Data, clanTabMembers, state)
+	if state.memPage >= state.memTotalPages {
+		state.memPage = state.memTotalPages - 1
+		embed, state = buildClanTabEmbed(clanResult.Data, clanTabMembers, state)
+	}
+	sendClanPanel(s, i, embed, clanResult.Data.Tag, clanTabMembers, state, true)
+}
+
+func handleClanWarButton(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	action, tag, sort, page, ok := parseClanWarButtonID(i.MessageComponentData().CustomID)
+	if !ok {
+		return
+	}
+
+	switch action {
+	case "p":
+		page--
+	case "n":
+		page++
+	}
+	if page < 0 {
+		page = 0
+	}
+
+	respondClanWarPanel(s, i, tag, page, sort)
+}
+
+func handleClanWarSortSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	tag, _, ok := parseClanWarSortSelectID(i.MessageComponentData().CustomID)
+	if !ok {
+		return
+	}
+
+	values := i.MessageComponentData().Values
+	if len(values) == 0 {
+		return
+	}
+
+	respondClanWarPanel(s, i, tag, 0, normalizeClanWarSort(values[0]))
+}
+
+func respondClanWarPanel(s *discordgo.Session, i *discordgo.InteractionCreate, tag string, page int, sort string) {
+	if page < 0 {
+		page = 0
+	}
+
+	clanResult := getClanByTag(tag)
+	if !clanResult.OK {
+		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseUpdateMessage,
+			Data: &discordgo.InteractionResponseData{
+				Embeds: []*discordgo.MessageEmbed{withStatsEmbed(&discordgo.MessageEmbed{
+					Title:       "Clan Unavailable",
+					Description: clanResult.Error,
+				}, "")},
+				Components: clanPanelComponents(tag, clanTabWars, clanPanelState{warSort: sort, memSort: clanMemberDefaultSort, memTotalPages: 1, warTotalPages: 1}),
+			},
+		})
+		return
+	}
+
+	upsertKnownClan(clanResult.Data)
+	state := clanPanelState{warPage: page, warSort: sort, memSort: clanMemberDefaultSort, memTotalPages: 1, warTotalPages: 1}
+	embed, state := buildClanTabEmbed(clanResult.Data, clanTabWars, state)
+	if state.warPage >= state.warTotalPages {
+		state.warPage = state.warTotalPages - 1
+		embed, state = buildClanTabEmbed(clanResult.Data, clanTabWars, state)
+	}
+	sendClanPanel(s, i, embed, clanResult.Data.Tag, clanTabWars, state, true)
+}
+
+func handleClanCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	ctx := getCommandContext(i)
+	userID := interactionUserID(i)
+	clanTag, ok := resolveClanTag(userID, stringOption(ctx.options, "clan"))
+	if !ok || clanTag == "" {
+		if len(listUserAccounts(userID)) == 0 {
+			ephemeralText(s, i, "Verify a player account first with `/verify verify`, or provide a clan tag.")
+			return
+		}
+		ephemeralText(s, i, "None of your linked accounts are in a clan. Provide a clan tag or join a clan in-game.")
+		return
+	}
+
+	result := getClanByTag(clanTag)
+	if !result.OK {
+		ephemeralText(s, i, "Failed to fetch clan data: "+result.Error)
+		return
+	}
+
+	upsertKnownClan(result.Data)
+	recordCommandUsage(userID, "clan", result.Data.Tag)
+	embed, state := buildClanTabEmbed(result.Data, clanTabOverview, defaultClanPanelState())
+	sendClanPanel(s, i, embed, result.Data.Tag, clanTabOverview, state, false)
 }
 
 func buildPlayerOverviewEmbed(player Player) *discordgo.MessageEmbed {
@@ -480,7 +1576,7 @@ func buildPlayerOverviewEmbed(player Player) *discordgo.MessageEmbed {
 			{Name: "Builder League", Value: player.BuilderBaseLeague.Name, Inline: true},
 			{Name: "Legend Trophies", Value: fmt.Sprintf("%d", player.LegendStatistics.LegendTrophies), Inline: true},
 		},
-	}, playerThumbnailURL(player), embedColorPlayer)
+	}, playerThumbnailURL(player))
 }
 
 func buildPlayerEquipmentProgressEmbed(player Player) *discordgo.MessageEmbed {
@@ -497,7 +1593,7 @@ func buildPlayerEquipmentProgressEmbed(player Player) *discordgo.MessageEmbed {
 	return withStatsEmbed(&discordgo.MessageEmbed{
 		Title:       player.Name,
 		Description: embedDescriptionWithTag(player.Tag, "### Player Equipment\n"+strings.Join(lines, "\n")),
-	}, playerThumbnailURL(player), embedColorPlayer)
+	}, playerThumbnailURL(player))
 }
 
 func buildPlayerUpgradeProgressEmbed(player Player) *discordgo.MessageEmbed {
@@ -509,7 +1605,7 @@ func buildPlayerUpgradeProgressEmbed(player Player) *discordgo.MessageEmbed {
 			makeProgressField("Heroes", player.Heroes),
 			makeProgressField("Spells", player.Spells),
 		},
-	}, playerThumbnailURL(player), embedColorPlayer)
+	}, playerThumbnailURL(player))
 }
 
 func buildPlayerItemsEmbed(player Player, title string, items []PlayerItemLevel, emptyMessage string) *discordgo.MessageEmbed {
@@ -530,24 +1626,311 @@ func buildPlayerItemsEmbed(player Player, title string, items []PlayerItemLevel,
 	return withStatsEmbed(&discordgo.MessageEmbed{
 		Title:       player.Name,
 		Description: embedDescriptionWithTag(player.Tag, "### "+title+"\n"+strings.Join(lines, "\n")),
-	}, playerThumbnailURL(player), embedColorPlayer)
+	}, playerThumbnailURL(player))
 }
 
-func buildPlayerAchievementsEmbed(player Player) *discordgo.MessageEmbed {
-	lines := make([]string, 0, len(player.Achievements))
-	for _, achievement := range player.Achievements {
-		lines = append(lines, fmt.Sprintf("%s: %d/%d (%d stars)", achievement.Name, achievement.Value, achievement.Target, achievement.Stars))
+var playerAchievementSorts = []struct {
+	key   string
+	label string
+}{
+	{key: "default", label: "Default Order"},
+	{key: "progress-asc", label: "Progress (Low to High)"},
+	{key: "progress-desc", label: "Progress (High to Low)"},
+}
+
+func normalizePlayerAchSort(sort string) string {
+	for _, option := range playerAchievementSorts {
+		if option.key == sort {
+			return sort
+		}
 	}
-	if len(lines) == 0 {
+	return playerAchDefaultSort
+}
+
+func playerAchSortLabel(sort string) string {
+	for _, option := range playerAchievementSorts {
+		if option.key == sort {
+			return option.label
+		}
+	}
+	return "Default Order"
+}
+
+func achievementProgressRatio(achievement PlayerAchievementProgress) float64 {
+	if achievement.Target > 0 {
+		ratio := float64(achievement.Value) / float64(achievement.Target)
+		if ratio > 1 {
+			return 1
+		}
+		return ratio
+	}
+	return float64(achievement.Stars) / 3
+}
+
+func achievementStarTotals(achievements []PlayerAchievementProgress) (earned, possible int) {
+	for _, achievement := range achievements {
+		earned += achievement.Stars
+		possible += 3
+	}
+	return earned, possible
+}
+
+func sortPlayerAchievements(achievements []PlayerAchievementProgress, sortKey string) {
+	type indexedAchievement struct {
+		achievement PlayerAchievementProgress
+		index       int
+	}
+
+	items := make([]indexedAchievement, len(achievements))
+	for i, achievement := range achievements {
+		items[i] = indexedAchievement{achievement: achievement, index: i}
+	}
+
+	sortKey = normalizePlayerAchSort(sortKey)
+	switch sortKey {
+	case "progress-asc":
+		sort.Slice(items, func(i, j int) bool {
+			ri, rj := achievementProgressRatio(items[i].achievement), achievementProgressRatio(items[j].achievement)
+			if ri != rj {
+				return ri < rj
+			}
+			return items[i].index < items[j].index
+		})
+	case "progress-desc":
+		sort.Slice(items, func(i, j int) bool {
+			ri, rj := achievementProgressRatio(items[i].achievement), achievementProgressRatio(items[j].achievement)
+			if ri != rj {
+				return ri > rj
+			}
+			return items[i].index < items[j].index
+		})
+	default:
+		sort.Slice(items, func(i, j int) bool {
+			return items[i].index < items[j].index
+		})
+	}
+
+	for i, item := range items {
+		achievements[i] = item.achievement
+	}
+}
+
+func formatAchievementLine(index int, achievement PlayerAchievementProgress) string {
+	return fmt.Sprintf(
+		"**%d.** %s — `%s`/`%s` · `%d` stars",
+		index,
+		achievement.Name,
+		formatCompactNumber(achievement.Value),
+		formatCompactNumber(achievement.Target),
+		achievement.Stars,
+	)
+}
+
+func buildPlayerAchievementsEmbed(player Player, page int, sortKey string) (*discordgo.MessageEmbed, int) {
+	sortKey = normalizePlayerAchSort(sortKey)
+	achievements := append([]PlayerAchievementProgress(nil), player.Achievements...)
+	sortPlayerAchievements(achievements, sortKey)
+
+	earnedStars, possibleStars := achievementStarTotals(achievements)
+
+	totalPages := (len(achievements) + playerAchievementsPerPage - 1) / playerAchievementsPerPage
+	if totalPages == 0 {
+		totalPages = 1
+	}
+	if page >= totalPages {
+		page = totalPages - 1
+	}
+	if page < 0 {
+		page = 0
+	}
+
+	start := page * playerAchievementsPerPage
+	end := start + playerAchievementsPerPage
+	if end > len(achievements) {
+		end = len(achievements)
+	}
+	pageAchievements := achievements[start:end]
+
+	header := fmt.Sprintf(
+		"### Achievements\n-# Total: `%s` / `%s` stars · Sorted by %s · Page %d/%d",
+		formatCompactNumber(earnedStars),
+		formatCompactNumber(possibleStars),
+		playerAchSortLabel(sortKey),
+		page+1,
+		totalPages,
+	)
+
+	lines := make([]string, 0, len(pageAchievements)+1)
+	lines = append(lines, header)
+	if len(pageAchievements) == 0 {
 		lines = append(lines, "No achievements found.")
+	} else {
+		for i, achievement := range pageAchievements {
+			lines = append(lines, formatAchievementLine(start+i+1, achievement))
+		}
 	}
-	if len(lines) > 20 {
-		lines = lines[:20]
-	}
+
 	return withStatsEmbed(&discordgo.MessageEmbed{
 		Title:       player.Name,
-		Description: embedDescriptionWithTag(player.Tag, "### Achievements\n"+strings.Join(lines, "\n")),
-	}, playerThumbnailURL(player), embedColorPlayer)
+		Description: embedDescriptionWithTag(player.Tag, strings.Join(lines, "\n")),
+	}, playerThumbnailURL(player)), totalPages
+}
+
+func playerAchButtonID(action, tag, sort string, page int) string {
+	return fmt.Sprintf("%s%s:%s:%d:%s", playerAchPrefix, action, strings.TrimPrefix(normalizeTag(tag), "#"), page, sort)
+}
+
+func parsePlayerAchButtonID(customID string) (action, tag, sort string, page int, ok bool) {
+	if !strings.HasPrefix(customID, playerAchPrefix) {
+		return "", "", "", 0, false
+	}
+	parts := strings.Split(strings.TrimPrefix(customID, playerAchPrefix), ":")
+	if len(parts) != 4 {
+		return "", "", "", 0, false
+	}
+	action = parts[0]
+	if action != "p" && action != "n" {
+		return "", "", "", 0, false
+	}
+	page, err := strconv.Atoi(parts[2])
+	if err != nil || page < 0 {
+		return "", "", "", 0, false
+	}
+	return action, normalizeTag(parts[1]), normalizePlayerAchSort(parts[3]), page, true
+}
+
+func playerAchSortSelectID(tag string, page int) string {
+	return fmt.Sprintf("%s%s:%d", playerAchSortPrefix, strings.TrimPrefix(normalizeTag(tag), "#"), page)
+}
+
+func parsePlayerAchSortSelectID(customID string) (tag string, page int, ok bool) {
+	if !strings.HasPrefix(customID, playerAchSortPrefix) {
+		return "", 0, false
+	}
+	parts := strings.Split(strings.TrimPrefix(customID, playerAchSortPrefix), ":")
+	if len(parts) != 2 {
+		return "", 0, false
+	}
+	page, err := strconv.Atoi(parts[1])
+	if err != nil || page < 0 {
+		return "", 0, false
+	}
+	return normalizeTag(parts[0]), page, true
+}
+
+func playerAchPanelComponents(tag string, page, totalPages int, sort string) []discordgo.MessageComponent {
+	sort = normalizePlayerAchSort(sort)
+	sortOptions := make([]discordgo.SelectMenuOption, 0, len(playerAchievementSorts))
+	for _, option := range playerAchievementSorts {
+		sortOptions = append(sortOptions, discordgo.SelectMenuOption{
+			Label:       option.label,
+			Value:       option.key,
+			Description: "Sort achievements by " + strings.ToLower(option.label),
+			Default:     sort == option.key,
+		})
+	}
+	minValues := 1
+	return []discordgo.MessageComponent{
+		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			discordgo.SelectMenu{
+				CustomID:    playerAchSortSelectID(tag, page),
+				Placeholder: "Sort by: " + playerAchSortLabel(sort),
+				MinValues:   &minValues,
+				MaxValues:   1,
+				Options:     sortOptions,
+			},
+		}},
+		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			discordgo.Button{
+				Label:    "Previous",
+				Style:    discordgo.SecondaryButton,
+				CustomID: playerAchButtonID("p", tag, sort, page),
+				Disabled: page <= 0,
+			},
+			discordgo.Button{
+				Label:    "Next",
+				Style:    discordgo.SecondaryButton,
+				CustomID: playerAchButtonID("n", tag, sort, page),
+				Disabled: page >= totalPages-1,
+			},
+		}},
+	}
+}
+
+func sendPlayerAchievementsPanel(s *discordgo.Session, i *discordgo.InteractionCreate, player Player, page int, sort string, update bool) {
+	sort = normalizePlayerAchSort(sort)
+	embed, totalPages := buildPlayerAchievementsEmbed(player, page, sort)
+	if page >= totalPages {
+		page = totalPages - 1
+		embed, totalPages = buildPlayerAchievementsEmbed(player, page, sort)
+	}
+
+	responseType := discordgo.InteractionResponseChannelMessageWithSource
+	if update {
+		responseType = discordgo.InteractionResponseUpdateMessage
+	}
+	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: responseType,
+		Data: &discordgo.InteractionResponseData{
+			Embeds:     []*discordgo.MessageEmbed{embed},
+			Components: playerAchPanelComponents(player.Tag, page, totalPages, sort),
+		},
+	})
+}
+
+func handlePlayerAchievementsButton(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	action, tag, sort, page, ok := parsePlayerAchButtonID(i.MessageComponentData().CustomID)
+	if !ok {
+		return
+	}
+
+	switch action {
+	case "p":
+		page--
+	case "n":
+		page++
+	}
+	if page < 0 {
+		page = 0
+	}
+
+	respondPlayerAchievementsPanel(s, i, tag, page, sort)
+}
+
+func handlePlayerAchievementsSortSelect(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	tag, _, ok := parsePlayerAchSortSelectID(i.MessageComponentData().CustomID)
+	if !ok {
+		return
+	}
+
+	values := i.MessageComponentData().Values
+	if len(values) == 0 {
+		return
+	}
+
+	respondPlayerAchievementsPanel(s, i, tag, 0, normalizePlayerAchSort(values[0]))
+}
+
+func respondPlayerAchievementsPanel(s *discordgo.Session, i *discordgo.InteractionCreate, tag string, page int, sort string) {
+	if page < 0 {
+		page = 0
+	}
+
+	result := getPlayerByTag(tag)
+	if !result.OK {
+		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseUpdateMessage,
+			Data: &discordgo.InteractionResponseData{
+				Embeds: []*discordgo.MessageEmbed{withStatsEmbed(&discordgo.MessageEmbed{
+					Title:       "Player Unavailable",
+					Description: result.Error,
+				}, "")},
+			},
+		})
+		return
+	}
+
+	sendPlayerAchievementsPanel(s, i, result.Data, page, sort, true)
 }
 
 func buildVerifyListEmbed(accounts []string, mainTag string) *discordgo.MessageEmbed {
@@ -565,7 +1948,7 @@ func buildVerifyListEmbed(accounts []string, mainTag string) *discordgo.MessageE
 	return withStatsEmbed(&discordgo.MessageEmbed{
 		Title:       "Linked Accounts",
 		Description: strings.Join(lines, "\n"),
-	}, "", embedColorSuccess)
+	}, "")
 }
 
 func userHasAccount(discordUserID, tag string) bool {
@@ -604,7 +1987,7 @@ func resolveAndFetchPlayer(s *discordgo.Session, i *discordgo.InteractionCreate)
 }
 
 var helpUsageByCommand = map[string]string{
-	"clan":                    "/clan stats [clan]",
+	"clan":                    "/clan [clan]",
 	"help":                    "/help [command]",
 	"player profile":          "/player profile [player]",
 	"player achievements":     "/player achievements [player]",
@@ -626,6 +2009,14 @@ func getHelpCommandNames() []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+func formatHelpCommandList(commands []string) string {
+	lines := make([]string, 0, len(commands))
+	for _, usage := range commands {
+		lines = append(lines, "- `"+usage+"`")
+	}
+	return strings.Join(lines, "\n")
 }
 
 func getHelpCommandChoices(partial string) []*discordgo.ApplicationCommandOptionChoice {
@@ -701,18 +2092,11 @@ var (
 			Description: "Clan stats and insights.",
 			Options: []*discordgo.ApplicationCommandOption{
 				{
-					Type:        discordgo.ApplicationCommandOptionSubCommand,
-					Name:        "stats",
-					Description: "Shows a high-level clan summary.",
-					Options: []*discordgo.ApplicationCommandOption{
-						{
-							Type:         discordgo.ApplicationCommandOptionString,
-							Name:         "clan",
-							Description:  "Clan tag or known clan name.",
-							Required:     false,
-							Autocomplete: true,
-						},
-					},
+					Type:         discordgo.ApplicationCommandOptionString,
+					Name:         "clan",
+					Description:  "Clan tag or known clan name.",
+					Required:     false,
+					Autocomplete: true,
 				},
 			},
 		},
@@ -802,55 +2186,29 @@ var (
 			ctx := getCommandContext(i)
 			commandName := strings.ToLower(strings.TrimSpace(stringOption(ctx.options, "command")))
 
-			embed := withStatsEmbed(&discordgo.MessageEmbed{
-				Title: "Available Commands",
-			}, "", embedColorHelp)
 			if commandName != "" {
 				usage, found := helpUsageByCommand[commandName]
 				if !found {
 					ephemeralText(s, i, "Unknown command. Use autocomplete for valid commands.")
 					return
 				}
-				embed.Title = "Help: " + commandName
-				embed.Description = usage
-				respondWithEmbed(s, i, embed)
+				respondWithEmbed(s, i, withStatsEmbed(&discordgo.MessageEmbed{
+					Title:       "Help: " + commandName,
+					Description: formatHelpCommandList([]string{usage}),
+				}, ""))
 				return
 			}
 
-			fields := make([]*discordgo.MessageEmbedField, 0, len(helpUsageByCommand))
+			commands := make([]string, 0, len(helpUsageByCommand))
 			for _, name := range getHelpCommandNames() {
-				fields = append(fields, &discordgo.MessageEmbedField{Name: name, Value: helpUsageByCommand[name]})
+				commands = append(commands, helpUsageByCommand[name])
 			}
-			embed.Fields = fields
-			respondWithEmbed(s, i, embed)
+			respondWithEmbed(s, i, withStatsEmbed(&discordgo.MessageEmbed{
+				Title:       "Available Commands",
+				Description: formatHelpCommandList(commands),
+			}, ""))
 		},
-		"clan": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-			ctx := getCommandContext(i)
-			if ctx.subcommand != "stats" {
-				ephemeralText(s, i, "Unsupported clan subcommand.")
-				return
-			}
-
-			userID := interactionUserID(i)
-			clanTag, ok := resolveClanTag(userID, stringOption(ctx.options, "clan"))
-			if !ok || clanTag == "" {
-				if len(listUserAccounts(userID)) == 0 {
-					ephemeralText(s, i, "Verify a player account first with `/verify verify`, or provide a clan tag.")
-					return
-				}
-				ephemeralText(s, i, "None of your linked accounts are in a clan. Provide a clan tag or join a clan in-game.")
-				return
-			}
-
-			result := getClanByTag(clanTag)
-			if !result.OK {
-				ephemeralText(s, i, "Failed to fetch clan data: "+result.Error)
-				return
-			}
-			upsertKnownClan(result.Data)
-			recordCommandUsage(userID, "clan", result.Data.Tag)
-			respondWithEmbed(s, i, buildClanOverviewEmbed(result.Data))
-		},
+		"clan": handleClanCommand,
 		"player": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
 			ctx := getCommandContext(i)
 			player, ok := resolveAndFetchPlayer(s, i)
@@ -870,7 +2228,7 @@ var (
 			case "spells":
 				respondWithEmbed(s, i, buildPlayerItemsEmbed(player, "Spells", player.Spells, "No spells found."))
 			case "achievements":
-				respondWithEmbed(s, i, buildPlayerAchievementsEmbed(player))
+				sendPlayerAchievementsPanel(s, i, player, 0, playerAchDefaultSort, false)
 			case "upgrade-progress":
 				respondWithEmbed(s, i, buildPlayerUpgradeProgressEmbed(player))
 			default:
@@ -918,7 +2276,6 @@ var (
 						"Linked Accounts",
 						"No linked accounts yet. Use `/verify verify` with a player tag to start.",
 						"",
-						embedColorSuccess,
 					))
 					return
 				}
@@ -938,7 +2295,6 @@ var (
 					"Account Removed",
 					"Removed linked account `"+playerTag+"`.",
 					"",
-					embedColorSuccess,
 				))
 			case "set-main":
 				playerTag, ok := resolvePlayerTag(userID, stringOption(ctx.options, "player"))
@@ -955,7 +2311,6 @@ var (
 					"Main Account Updated",
 					"Set `"+playerTag+"` as your main account.",
 					"",
-					embedColorSuccess,
 				))
 			default:
 				ephemeralText(s, i, "Unsupported verify subcommand.")
