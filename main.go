@@ -47,6 +47,13 @@ func main() {
 			return
 		}
 
+		if i.Type == discordgo.InteractionModalSubmit {
+			if strings.HasPrefix(i.ModalSubmitData().CustomID, verifyTokenModalPrefix) {
+				handleVerifyTokenModalSubmit(s, i)
+			}
+			return
+		}
+
 		if h, ok := CommandHandlers[i.ApplicationCommandData().Name]; ok {
 			h(s, i)
 		}

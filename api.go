@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"log"
@@ -42,8 +43,13 @@ func formatTag(tag string) string {
 	return url.PathEscape(normalized)
 }
 
-func get(rawURL string) ([]byte, int, string, bool) {
-	req, err := http.NewRequest("GET", rawURL, nil)
+func doRequest(method, rawURL string, body []byte) ([]byte, int, string, bool) {
+	var requestBody io.Reader
+	if len(body) > 0 {
+		requestBody = bytes.NewReader(body)
+	}
+
+	req, err := http.NewRequest(method, rawURL, requestBody)
 	if err != nil {
 		log.Println("failed to build request:", err)
 		return nil, 0, "failed to build request", false
@@ -55,6 +61,9 @@ func get(rawURL string) ([]byte, int, string, bool) {
 	}
 	req.Header.Set("Authorization", "Bearer "+cocToken)
 	req.Header.Set("Accept", "application/json")
+	if len(body) > 0 {
+		req.Header.Set("Content-Type", "application/json")
+	}
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -75,6 +84,19 @@ func get(rawURL string) ([]byte, int, string, bool) {
 	}
 
 	return data, resp.StatusCode, "", true
+}
+
+func get(rawURL string) ([]byte, int, string, bool) {
+	return doRequest(http.MethodGet, rawURL, nil)
+}
+
+func postJSON(rawURL string, payload any) ([]byte, int, string, bool) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		log.Println("failed to encode request body:", err)
+		return nil, 0, "failed to encode request body", false
+	}
+	return doRequest(http.MethodPost, rawURL, body)
 }
 
 func parseAPIError(data []byte) string {
@@ -119,4 +141,21 @@ func getPlayerByTag(tag string) APIResult[Player] {
 		return APIResult[Player]{OK: false, StatusCode: statusCode, Error: "failed to parse player response"}
 	}
 	return APIResult[Player]{Data: player, OK: true, StatusCode: statusCode}
+}
+
+func verifyPlayerToken(tag, token string) APIResult[VerifyTokenResponse] {
+	data, statusCode, reason, ok := postJSON(
+		baseURL+"players/"+formatTag(tag)+"/verifytoken",
+		VerifyTokenRequest{Token: strings.TrimSpace(token)},
+	)
+	if !ok {
+		return APIResult[VerifyTokenResponse]{OK: false, StatusCode: statusCode, Error: reason}
+	}
+
+	var verification VerifyTokenResponse
+	if err := json.Unmarshal(data, &verification); err != nil {
+		log.Println("failed to parse verify token response:", err)
+		return APIResult[VerifyTokenResponse]{OK: false, StatusCode: statusCode, Error: "failed to parse verify token response"}
+	}
+	return APIResult[VerifyTokenResponse]{Data: verification, OK: true, StatusCode: statusCode}
 }

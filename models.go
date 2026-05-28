@@ -261,3 +261,13 @@ type Player struct {
 	PreviousLeagueGroupTag   string
 	PreviousLeagueSeasonId   int
 }
+
+type VerifyTokenRequest struct {
+	Token string `json:"token"`
+}
+
+type VerifyTokenResponse struct {
+	Tag    string `json:"tag"`
+	Token  string `json:"token"`
+	Status string `json:"status"`
+}
