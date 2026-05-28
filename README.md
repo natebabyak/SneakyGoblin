@@ -4,11 +4,14 @@ SneakyGoblin is a Discord bot for [Clash of Clans](https://supercell.com/en/game
 
 ## Features
 
-- **Clan summaries** — Members, level, points, war record, capital points, requirements, labels, and more
+- **Clan panel** — Tabbed view (Overview, Members, Wars, Clan Capital) with interactive buttons
+- **Member roster** — Paginated inline table (15 per page) with sortable columns: league & trophies, trophies, town hall, role, donations, builder trophies, and more
+- **War log** — Paginated war history (15 per page), current-war summary, win/loss/tie record, and sortable columns
 - **Player profiles** — Town Hall, trophies, leagues, donations, builder base, legend stats, and clan membership
-- **Progression views** — Heroes, troops, spells, hero equipment, achievements, and combined upgrade progress
+- **Progression views** — Heroes, troops, spells, hero equipment, achievements (paginated), and combined upgrade progress
+- **Achievements browser** — Total star completion, compact number formatting (K/M/B), and sort by default order or progress
 - **Account linking** — Verify ownership via the in-game API token (Clash `verifytoken` endpoint)
-- **Smart defaults** — Optional `player` and `clan` arguments fall back to your linked main account; `/clan stats` uses your verified account’s clan when you omit a tag
+- **Smart defaults** — Optional `player` and `clan` arguments fall back to your linked main account; `/clan` uses your verified account’s clan when you omit a tag
 - **Autocomplete** — Player and clan options suggest tags and names the bot has seen before
 - **Local cache** — SQLite stores known players/clans and linked Discord accounts for faster autocomplete and lookups
 
@@ -38,7 +41,7 @@ go mod download
 go run .
 ```
 
-On startup the bot opens a SQLite database (`data.db`), connects to Discord, clears global slash commands, and registers commands on the guild specified by `DISCORD_GUILD_ID`. Restart the bot after changing command definitions so Discord receives the updated slash commands.
+On startup the bot opens a SQLite database (`data.db`), connects to Discord, clears global slash commands, and registers commands on the guild specified by `DISCORD_GUILD_ID`. Restart the bot after changing command definitions or interactive components so Discord receives the updates.
 
 ## Configuration
 
@@ -84,8 +87,21 @@ All commands are slash commands. Most player and clan commands accept an optiona
 
 | Command | Description |
 |---------|-------------|
-| `/clan stats` | Clan overview for your verified account’s clan |
-| `/clan stats clan:<tag or name>` | Clan overview for a specific clan |
+| `/clan` | Open the clan panel for your verified account’s clan |
+| `/clan clan:<tag or name>` | Open the clan panel for a specific clan |
+
+The clan panel uses tabs:
+
+| Tab | What it shows |
+|-----|----------------|
+| **Overview** | Level, points, war record, requirements, labels, and clan details |
+| **Members** | Paginated roster table with sort menu and prev/next controls |
+| **Wars** | Current war (if any), war-log record (W/L/T), and paginated war history |
+| **Clan Capital** | Capital points, leagues, and district info |
+
+**Member sort options:** League & Trophies (default), Trophies, Town Hall, Role, Troops Donated, Troops Received, XP Level, Builder Trophies.
+
+**War log sort options:** Date (default), Result, Opponent, Stars, Destruction, War Size.
 
 ### Player
 
@@ -96,10 +112,18 @@ All commands are slash commands. Most player and clan commands accept an optiona
 | `/player troops` | Troop levels |
 | `/player spells` | Spell levels |
 | `/player equipment` | Hero equipment levels |
-| `/player achievements` | Achievement progress |
+| `/player achievements` | Achievement progress (paginated, sortable) |
 | `/player upgrade-progress` | Troops, heroes, and spells in one view |
 
 Append `player:<tag or name>` to any player subcommand to target a specific account. Without it, the bot uses your main linked player.
+
+**Achievements view** includes total star progress (`earned / possible`), 15 achievements per page, prev/next buttons, and a sort menu:
+
+- Default Order
+- Progress (Low to High)
+- Progress (High to Low)
+
+Values of 1,000 or greater use compact notation with three significant figures (for example `1.00B`, `1.23M`, `1.50K`).
 
 ### Verify (account linking)
 
@@ -119,14 +143,20 @@ The first successfully linked account becomes your main account if none is set. 
 3. The bot calls the Clash API verify endpoint to confirm you own that account.
 4. On success, the tag is stored in SQLite and associated with your Discord user ID.
 
-Linked accounts are per Discord user and per guild context (stored locally on the machine running the bot).
+Linked accounts are per Discord user and stored locally on the machine running the bot.
+
+## Embeds and UI
+
+- Embeds use brand color `#00c950` and a **SneakyGoblin** footer with a timestamp.
+- Player tags appear as subtext under the title for easy scanning.
+- Clan and player panels use Discord message components (tabs, select menus, and pagination buttons). These update the same message in place when you interact with them.
 
 ## Project layout
 
 ```
 .
 ├── main.go       # Bot entrypoint, env loading, Discord session, command sync
-├── commands.go   # Slash command definitions, handlers, embed builders
+├── commands.go   # Slash command definitions, handlers, embed builders, UI components
 ├── api.go        # Clash of Clans HTTP client
 ├── models.go     # API response types (Clash data model)
 ├── db.go         # SQLite schema and persistence
@@ -160,8 +190,10 @@ Run the binary under a process manager (systemd, Docker, etc.) and ensure the ho
 | Issue | What to check |
 |-------|----------------|
 | Slash commands missing | Bot restarted after code changes; `DISCORD_GUILD_ID` matches the server; bot has `applications.commands` scope |
+| Buttons or menus do nothing | Bot restarted after component ID changes; you are clicking a message from the current bot session |
 | `COC token is not configured` | `COC_TOKEN` set in `.env` and loaded (`.env` present in working directory) |
 | Clan command asks to verify | Link an account with `/verify verify`; account must be in a clan; run `/player profile` once to refresh cached clan data |
+| War log empty or private | Clan war log must be public in-game; API returns limited data when private |
 | Verification fails | Token is fresh (one-time use); tag includes `#`; API key is valid |
 | SQLite errors on Linux | CGO and `libsqlite3` dev packages installed |
 
