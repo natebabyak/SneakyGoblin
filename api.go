@@ -140,22 +140,58 @@ func getPlayerByTag(tag string) APIResult[Player] {
 		log.Println("failed to parse player response:", err)
 		return APIResult[Player]{OK: false, StatusCode: statusCode, Error: "failed to parse player response"}
 	}
+	patchPlayerAPIFields(data, &player)
 	return APIResult[Player]{Data: player, OK: true, StatusCode: statusCode}
 }
 
-func verifyPlayerToken(tag, token string) APIResult[VerifyTokenResponse] {
+// patchPlayerAPIFields fills fields the Player struct cannot map by name alone (e.g. clan).
+func patchPlayerAPIFields(data []byte, player *Player) {
+	var aux struct {
+		Clan PlayerClan `json:"clan"`
+		Role Role       `json:"role"`
+		Tag  string     `json:"tag"`
+		Name string     `json:"name"`
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return
+	}
+	if strings.TrimSpace(player.Player.Tag) == "" && strings.TrimSpace(aux.Clan.Tag) != "" {
+		player.Player = aux.Clan
+	}
+	if player.Role == "" && aux.Role != "" {
+		player.Role = aux.Role
+	}
+	if strings.TrimSpace(player.Tag) == "" {
+		player.Tag = aux.Tag
+	}
+	if strings.TrimSpace(player.Name) == "" {
+		player.Name = aux.Name
+	}
+}
+
+type verifyTokenRequest struct {
+	Token string `json:"token"`
+}
+
+type verifyTokenResponse struct {
+	Tag    string `json:"tag"`
+	Token  string `json:"token"`
+	Status string `json:"status"`
+}
+
+func verifyPlayerToken(tag, token string) APIResult[verifyTokenResponse] {
 	data, statusCode, reason, ok := postJSON(
 		baseURL+"players/"+formatTag(tag)+"/verifytoken",
-		VerifyTokenRequest{Token: strings.TrimSpace(token)},
+		verifyTokenRequest{Token: strings.TrimSpace(token)},
 	)
 	if !ok {
-		return APIResult[VerifyTokenResponse]{OK: false, StatusCode: statusCode, Error: reason}
+		return APIResult[verifyTokenResponse]{OK: false, StatusCode: statusCode, Error: reason}
 	}
 
-	var verification VerifyTokenResponse
+	var verification verifyTokenResponse
 	if err := json.Unmarshal(data, &verification); err != nil {
 		log.Println("failed to parse verify token response:", err)
-		return APIResult[VerifyTokenResponse]{OK: false, StatusCode: statusCode, Error: "failed to parse verify token response"}
+		return APIResult[verifyTokenResponse]{OK: false, StatusCode: statusCode, Error: "failed to parse verify token response"}
 	}
-	return APIResult[VerifyTokenResponse]{Data: verification, OK: true, StatusCode: statusCode}
+	return APIResult[verifyTokenResponse]{Data: verification, OK: true, StatusCode: statusCode}
 }

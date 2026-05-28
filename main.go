@@ -65,6 +65,10 @@ func main() {
 	}
 	defer s.Close()
 
+	if s.State != nil && s.State.User != nil {
+		botAvatarURL = s.State.User.AvatarURL("256")
+	}
+
 	appID := discordApplicationId
 	if appID == "" {
 		appID = s.State.User.ID

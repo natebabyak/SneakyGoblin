@@ -15,9 +15,16 @@ type commandContext struct {
 }
 
 const (
-	verifyTokenModalPrefix = "verify:add:"
+	verifyTokenModalPrefix = "verify:verify:"
 	verifyTokenInputID     = "token"
+	botWatermark           = "SneakyGoblin"
+	embedColorClan         = 0xF1C40F
+	embedColorPlayer       = 0xE67E22
+	embedColorSuccess      = 0x2ECC71
+	embedColorHelp         = 0x5865F2
 )
+
+var botAvatarURL string
 
 func getCommandContext(i *discordgo.InteractionCreate) commandContext {
 	data := i.ApplicationCommandData()
@@ -171,8 +178,10 @@ func handleVerifyTokenModalSubmit(s *discordgo.Session, i *discordgo.Interaction
 		s,
 		i,
 		buildStatusEmbed(
-			"Account Verified",
-			"Verified and linked "+playerResult.Data.Name+" ("+playerResult.Data.Tag+").",
+			playerResult.Data.Name,
+			embedDescriptionWithTag(playerResult.Data.Tag, "Verified and linked to your Discord account."),
+			playerThumbnailURL(playerResult.Data),
+			embedColorSuccess,
 		),
 	)
 }
@@ -196,11 +205,88 @@ func respondWithEphemeralEmbed(s *discordgo.Session, i *discordgo.InteractionCre
 	})
 }
 
-func buildStatusEmbed(title, description string) *discordgo.MessageEmbed {
-	return &discordgo.MessageEmbed{
+func statsEmbedFooter() *discordgo.MessageEmbedFooter {
+	footer := &discordgo.MessageEmbedFooter{
+		Text: botWatermark + " · " + time.Now().Format("2006-01-02 15:04:05"),
+	}
+	if botAvatarURL != "" {
+		footer.IconURL = botAvatarURL
+	}
+	return footer
+}
+
+func withStatsEmbed(embed *discordgo.MessageEmbed, thumbnailURL string, color int) *discordgo.MessageEmbed {
+	embed.Color = color
+	embed.Footer = statsEmbedFooter()
+	if thumbnailURL != "" {
+		embed.Thumbnail = &discordgo.MessageEmbedThumbnail{URL: thumbnailURL}
+	}
+	return embed
+}
+
+func tagSubheading(tag string) string {
+	return "## " + normalizeTag(tag)
+}
+
+func embedDescriptionWithTag(tag, body string) string {
+	tagLine := tagSubheading(tag)
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return tagLine
+	}
+	return tagLine + "\n\n" + body
+}
+
+func clanBadgeURL(clan Clan) string {
+	if clan.BadgeUrls.Medium != "" {
+		return clan.BadgeUrls.Medium
+	}
+	if clan.BadgeUrls.Large != "" {
+		return clan.BadgeUrls.Large
+	}
+	return clan.BadgeUrls.Small
+}
+
+func playerThumbnailURL(player Player) string {
+	if player.LeagueTier.IconUrls.Large != "" {
+		return player.LeagueTier.IconUrls.Large
+	}
+	if player.LeagueTier.IconUrls.Small != "" {
+		return player.LeagueTier.IconUrls.Small
+	}
+	if player.League.IconUrls.Small != "" {
+		return player.League.IconUrls.Small
+	}
+	if player.League.IconUrls.Tiny != "" {
+		return player.League.IconUrls.Tiny
+	}
+	if player.Player.BadgeUrls.Medium != "" {
+		return player.Player.BadgeUrls.Medium
+	}
+	return player.Player.BadgeUrls.Large
+}
+
+func buildStatusEmbed(title, description, thumbnailURL string, color int) *discordgo.MessageEmbed {
+	return withStatsEmbed(&discordgo.MessageEmbed{
 		Title:       title,
 		Description: description,
-		Footer:      &discordgo.MessageEmbedFooter{Text: time.Now().Format("2006-01-02 15:04:05")},
+	}, thumbnailURL, color)
+}
+
+func playerSubcommand(name, description string) *discordgo.ApplicationCommandOption {
+	return &discordgo.ApplicationCommandOption{
+		Type:        discordgo.ApplicationCommandOptionSubCommand,
+		Name:        name,
+		Description: description,
+		Options: []*discordgo.ApplicationCommandOption{
+			{
+				Type:         discordgo.ApplicationCommandOptionString,
+				Name:         "player",
+				Description:  "Player tag or known player name.",
+				Required:     false,
+				Autocomplete: true,
+			},
+		},
 	}
 }
 
@@ -249,18 +335,56 @@ func resolvePlayerTag(discordUserID, input string) (string, bool) {
 	return normalizeTag(matches[0].Tag), true
 }
 
+func clanTagFromPlayer(player Player) (string, bool) {
+	clanTag := strings.TrimSpace(player.Player.Tag)
+	if clanTag == "" {
+		return "", false
+	}
+	if strings.EqualFold(string(player.Role), "notMember") {
+		return "", false
+	}
+	return normalizeTag(clanTag), true
+}
+
+func resolveClanTagFromVerifiedAccounts(discordUserID string) (string, bool) {
+	accounts := listUserAccounts(discordUserID)
+	if len(accounts) == 0 {
+		return "", false
+	}
+
+	ordered := make([]string, 0, len(accounts))
+	if mainTag, ok := getUserMainAccount(discordUserID); ok {
+		ordered = append(ordered, mainTag)
+		for _, tag := range accounts {
+			if normalizeTag(tag) != normalizeTag(mainTag) {
+				ordered = append(ordered, tag)
+			}
+		}
+	} else {
+		ordered = append(ordered, accounts...)
+	}
+
+	for _, playerTag := range ordered {
+		if clanTag, ok := getKnownClanTagForPlayer(playerTag); ok {
+			return clanTag, true
+		}
+
+		result := getPlayerByTag(playerTag)
+		if !result.OK {
+			continue
+		}
+		if clanTag, ok := clanTagFromPlayer(result.Data); ok {
+			upsertKnownPlayer(result.Data)
+			return clanTag, true
+		}
+	}
+	return "", false
+}
+
 func resolveClanTag(discordUserID, input string) (string, bool) {
 	raw := strings.TrimSpace(input)
 	if raw == "" {
-		mainTag, ok := getUserMainAccount(discordUserID)
-		if !ok {
-			return "", false
-		}
-		playerResult := getPlayerByTag(mainTag)
-		if !playerResult.OK || playerResult.Data.Player.Tag == "" {
-			return "", false
-		}
-		return normalizeTag(playerResult.Data.Player.Tag), true
+		return resolveClanTagFromVerifiedAccounts(discordUserID)
 	}
 	if strings.HasPrefix(raw, "#") {
 		return normalizeTag(raw), true
@@ -306,9 +430,9 @@ func buildClanOverviewEmbed(clan Clan) *discordgo.MessageEmbed {
 		labels = append(labels, "None")
 	}
 
-	return &discordgo.MessageEmbed{
-		Title:       fmt.Sprintf("%s (%s)", clan.Name, clan.Tag),
-		Description: clan.Description,
+	return withStatsEmbed(&discordgo.MessageEmbed{
+		Title:       clan.Name,
+		Description: embedDescriptionWithTag(clan.Tag, clan.Description),
 		Fields: []*discordgo.MessageEmbedField{
 			{Name: "Members", Value: fmt.Sprintf("%d", clan.Members), Inline: true},
 			{Name: "Clan Level", Value: fmt.Sprintf("%d", clan.ClanLevel), Inline: true},
@@ -323,8 +447,7 @@ func buildClanOverviewEmbed(clan Clan) *discordgo.MessageEmbed {
 			{Name: "War Win Streak", Value: fmt.Sprintf("%d", clan.WarWinStreak), Inline: true},
 			{Name: "Labels", Value: strings.Join(labels, ", ")},
 		},
-		Footer: &discordgo.MessageEmbedFooter{Text: time.Now().Format("2006-01-02 15:04:05")},
-	}
+	}, clanBadgeURL(clan), embedColorClan)
 }
 
 func buildPlayerOverviewEmbed(player Player) *discordgo.MessageEmbed {
@@ -332,8 +455,9 @@ func buildPlayerOverviewEmbed(player Player) *discordgo.MessageEmbed {
 	if player.Player.Name != "" {
 		clanName = player.Player.Name
 	}
-	return &discordgo.MessageEmbed{
-		Title: fmt.Sprintf("%s (%s)", player.Name, player.Tag),
+	return withStatsEmbed(&discordgo.MessageEmbed{
+		Title:       player.Name,
+		Description: tagSubheading(player.Tag),
 		Fields: []*discordgo.MessageEmbedField{
 			{Name: "Town Hall", Value: fmt.Sprintf("%d", player.TownHallLevel), Inline: true},
 			{Name: "TH Weapon", Value: fmt.Sprintf("%d", player.TownHallWeaponLevel), Inline: true},
@@ -356,8 +480,7 @@ func buildPlayerOverviewEmbed(player Player) *discordgo.MessageEmbed {
 			{Name: "Builder League", Value: player.BuilderBaseLeague.Name, Inline: true},
 			{Name: "Legend Trophies", Value: fmt.Sprintf("%d", player.LegendStatistics.LegendTrophies), Inline: true},
 		},
-		Footer: &discordgo.MessageEmbedFooter{Text: time.Now().Format("2006-01-02 15:04:05")},
-	}
+	}, playerThumbnailURL(player), embedColorPlayer)
 }
 
 func buildPlayerEquipmentProgressEmbed(player Player) *discordgo.MessageEmbed {
@@ -371,23 +494,22 @@ func buildPlayerEquipmentProgressEmbed(player Player) *discordgo.MessageEmbed {
 	if len(lines) > 15 {
 		lines = lines[:15]
 	}
-	return &discordgo.MessageEmbed{
-		Title:       fmt.Sprintf("%s Player Equipment", player.Name),
-		Description: strings.Join(lines, "\n"),
-		Footer:      &discordgo.MessageEmbedFooter{Text: time.Now().Format("2006-01-02 15:04:05")},
-	}
+	return withStatsEmbed(&discordgo.MessageEmbed{
+		Title:       player.Name,
+		Description: embedDescriptionWithTag(player.Tag, "### Player Equipment\n"+strings.Join(lines, "\n")),
+	}, playerThumbnailURL(player), embedColorPlayer)
 }
 
 func buildPlayerUpgradeProgressEmbed(player Player) *discordgo.MessageEmbed {
-	return &discordgo.MessageEmbed{
-		Title: fmt.Sprintf("%s Upgrade Progress", player.Name),
+	return withStatsEmbed(&discordgo.MessageEmbed{
+		Title:       player.Name,
+		Description: embedDescriptionWithTag(player.Tag, "### Upgrade Progress"),
 		Fields: []*discordgo.MessageEmbedField{
 			makeProgressField("Troops", player.Troops),
 			makeProgressField("Heroes", player.Heroes),
 			makeProgressField("Spells", player.Spells),
 		},
-		Footer: &discordgo.MessageEmbedFooter{Text: time.Now().Format("2006-01-02 15:04:05")},
-	}
+	}, playerThumbnailURL(player), embedColorPlayer)
 }
 
 func buildPlayerItemsEmbed(player Player, title string, items []PlayerItemLevel, emptyMessage string) *discordgo.MessageEmbed {
@@ -405,11 +527,10 @@ func buildPlayerItemsEmbed(player Player, title string, items []PlayerItemLevel,
 	if len(lines) > 20 {
 		lines = lines[:20]
 	}
-	return &discordgo.MessageEmbed{
-		Title:       fmt.Sprintf("%s %s", player.Name, title),
-		Description: strings.Join(lines, "\n"),
-		Footer:      &discordgo.MessageEmbedFooter{Text: time.Now().Format("2006-01-02 15:04:05")},
-	}
+	return withStatsEmbed(&discordgo.MessageEmbed{
+		Title:       player.Name,
+		Description: embedDescriptionWithTag(player.Tag, "### "+title+"\n"+strings.Join(lines, "\n")),
+	}, playerThumbnailURL(player), embedColorPlayer)
 }
 
 func buildPlayerAchievementsEmbed(player Player) *discordgo.MessageEmbed {
@@ -423,11 +544,10 @@ func buildPlayerAchievementsEmbed(player Player) *discordgo.MessageEmbed {
 	if len(lines) > 20 {
 		lines = lines[:20]
 	}
-	return &discordgo.MessageEmbed{
-		Title:       fmt.Sprintf("%s Achievements", player.Name),
-		Description: strings.Join(lines, "\n"),
-		Footer:      &discordgo.MessageEmbedFooter{Text: time.Now().Format("2006-01-02 15:04:05")},
-	}
+	return withStatsEmbed(&discordgo.MessageEmbed{
+		Title:       player.Name,
+		Description: embedDescriptionWithTag(player.Tag, "### Achievements\n"+strings.Join(lines, "\n")),
+	}, playerThumbnailURL(player), embedColorPlayer)
 }
 
 func buildVerifyListEmbed(accounts []string, mainTag string) *discordgo.MessageEmbed {
@@ -442,11 +562,10 @@ func buildVerifyListEmbed(accounts []string, mainTag string) *discordgo.MessageE
 	if len(lines) == 0 {
 		lines = append(lines, "No linked accounts.")
 	}
-	return &discordgo.MessageEmbed{
+	return withStatsEmbed(&discordgo.MessageEmbed{
 		Title:       "Linked Accounts",
 		Description: strings.Join(lines, "\n"),
-		Footer:      &discordgo.MessageEmbedFooter{Text: time.Now().Format("2006-01-02 15:04:05")},
-	}
+	}, "", embedColorSuccess)
 }
 
 func userHasAccount(discordUserID, tag string) bool {
@@ -465,7 +584,7 @@ func resolveAndFetchPlayer(s *discordgo.Session, i *discordgo.InteractionCreate)
 
 	playerTag, ok := resolvePlayerTag(userID, stringOption(ctx.options, "player"))
 	if !ok || playerTag == "" {
-		ephemeralText(s, i, "Provide a player tag/name or set a main account with /verify-set-main.")
+		ephemeralText(s, i, "Provide a player tag/name or set a main account with `/verify set-main`.")
 		return Player{}, false
 	}
 
@@ -485,19 +604,19 @@ func resolveAndFetchPlayer(s *discordgo.Session, i *discordgo.InteractionCreate)
 }
 
 var helpUsageByCommand = map[string]string{
-	"clan":                  "/clan [clan]",
-	"help":                  "/help [command]",
-	"player":                "/player [player]",
-	"player achievements":   "/player-achievements [player]",
-	"player equipment":      "/player-equipment [player]",
-	"player heroes":         "/player-heroes [player]",
-	"player spells":         "/player-spells [player]",
-	"player troops":         "/player-troops [player]",
-	"player upgrade":        "/player-upgrade-progress [player]",
-	"verify":                "/verify player",
-	"verify list":           "/verify-list",
-	"verify remove":         "/verify-remove player",
-	"verify set-main":       "/verify-set-main player",
+	"clan":                    "/clan stats [clan]",
+	"help":                    "/help [command]",
+	"player profile":          "/player profile [player]",
+	"player achievements":     "/player achievements [player]",
+	"player equipment":        "/player equipment [player]",
+	"player heroes":           "/player heroes [player]",
+	"player spells":           "/player spells [player]",
+	"player troops":           "/player troops [player]",
+	"player upgrade-progress": "/player upgrade-progress [player]",
+	"verify verify":           "/verify verify player",
+	"verify list":             "/verify list",
+	"verify remove":           "/verify remove player",
+	"verify set-main":         "/verify set-main player",
 }
 
 func getHelpCommandNames() []string {
@@ -552,7 +671,14 @@ func handleClanAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreate
 }
 
 func handleVerifyAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreate) {
-	_, focusedValue := getFocusedAutocompleteValue(i)
+	subcommand, focusedValue := getFocusedAutocompleteValue(i)
+	if subcommand == "verify" {
+		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionApplicationCommandAutocompleteResult,
+			Data: &discordgo.InteractionResponseData{Choices: []*discordgo.ApplicationCommandOptionChoice{}},
+		})
+		return
+	}
 	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionApplicationCommandAutocompleteResult,
 		Data: &discordgo.InteractionResponseData{
@@ -562,18 +688,10 @@ func handleVerifyAutocomplete(s *discordgo.Session, i *discordgo.InteractionCrea
 }
 
 var CommandAutocompleteHandlers = map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate){
-	"clan":                  handleClanAutocomplete,
-	"help":                  handleHelpAutocomplete,
-	"player":                handlePlayerAutocomplete,
-	"player-achievements":   handlePlayerAutocomplete,
-	"player-equipment":      handlePlayerAutocomplete,
-	"player-heroes":         handlePlayerAutocomplete,
-	"player-spells":         handlePlayerAutocomplete,
-	"player-troops":         handlePlayerAutocomplete,
-	"player-upgrade-progress": handlePlayerAutocomplete,
-	"verify":                handleVerifyAutocomplete,
-	"verify-remove":         handleVerifyAutocomplete,
-	"verify-set-main":       handleVerifyAutocomplete,
+	"clan":   handleClanAutocomplete,
+	"help":   handleHelpAutocomplete,
+	"player": handlePlayerAutocomplete,
+	"verify": handleVerifyAutocomplete,
 }
 
 var (
@@ -583,11 +701,18 @@ var (
 			Description: "Clan stats and insights.",
 			Options: []*discordgo.ApplicationCommandOption{
 				{
-					Type:         discordgo.ApplicationCommandOptionString,
-					Name:         "clan",
-					Description:  "Clan tag or known clan name.",
-					Required:     false,
-					Autocomplete: true,
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "stats",
+					Description: "Shows a high-level clan summary.",
+					Options: []*discordgo.ApplicationCommandOption{
+						{
+							Type:         discordgo.ApplicationCommandOptionString,
+							Name:         "clan",
+							Description:  "Clan tag or known clan name.",
+							Required:     false,
+							Autocomplete: true,
+						},
+					},
 				},
 			},
 		},
@@ -606,135 +731,67 @@ var (
 		},
 		{
 			Name:        "player",
-			Description: "Player overview.",
+			Description: "Player stats and progression.",
 			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:         discordgo.ApplicationCommandOptionString,
-					Name:         "player",
-					Description:  "Player tag or known player name.",
-					Required:     false,
-					Autocomplete: true,
-				},
-			},
-		},
-		{
-			Name:        "player-equipment",
-			Description: "Player equipment levels.",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:         discordgo.ApplicationCommandOptionString,
-					Name:         "player",
-					Description:  "Player tag or known player name.",
-					Required:     false,
-					Autocomplete: true,
-				},
-			},
-		},
-		{
-			Name:        "player-heroes",
-			Description: "Player hero levels.",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:         discordgo.ApplicationCommandOptionString,
-					Name:         "player",
-					Description:  "Player tag or known player name.",
-					Required:     false,
-					Autocomplete: true,
-				},
-			},
-		},
-		{
-			Name:        "player-troops",
-			Description: "Player troop levels.",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:         discordgo.ApplicationCommandOptionString,
-					Name:         "player",
-					Description:  "Player tag or known player name.",
-					Required:     false,
-					Autocomplete: true,
-				},
-			},
-		},
-		{
-			Name:        "player-spells",
-			Description: "Player spell levels.",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:         discordgo.ApplicationCommandOptionString,
-					Name:         "player",
-					Description:  "Player tag or known player name.",
-					Required:     false,
-					Autocomplete: true,
-				},
-			},
-		},
-		{
-			Name:        "player-achievements",
-			Description: "Player achievement progress.",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:         discordgo.ApplicationCommandOptionString,
-					Name:         "player",
-					Description:  "Player tag or known player name.",
-					Required:     false,
-					Autocomplete: true,
-				},
-			},
-		},
-		{
-			Name:        "player-upgrade-progress",
-			Description: "Troops, heroes, and spells progression.",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:         discordgo.ApplicationCommandOptionString,
-					Name:         "player",
-					Description:  "Player tag or known player name.",
-					Required:     false,
-					Autocomplete: true,
-				},
+				playerSubcommand("profile", "Shows a player summary."),
+				playerSubcommand("equipment", "Shows hero equipment levels."),
+				playerSubcommand("heroes", "Shows hero levels."),
+				playerSubcommand("troops", "Shows troop levels."),
+				playerSubcommand("spells", "Shows spell levels."),
+				playerSubcommand("achievements", "Shows achievement progress."),
+				playerSubcommand("upgrade-progress", "Shows troops, heroes, and spells progression."),
 			},
 		},
 		{
 			Name:        "verify",
-			Description: "Verify and link a player account.",
+			Description: "Manage linked player accounts.",
 			Options: []*discordgo.ApplicationCommandOption{
 				{
-					Type:         discordgo.ApplicationCommandOptionString,
-					Name:         "player",
-					Description:  "Player tag to verify and link.",
-					Required:     true,
-					Autocomplete: true,
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "verify",
+					Description: "Verify and link a player account.",
+					Options: []*discordgo.ApplicationCommandOption{
+						{
+							Type:         discordgo.ApplicationCommandOptionString,
+							Name:         "player",
+							Description:  "Player tag to verify and link.",
+							Required:     true,
+							Autocomplete: true,
+						},
+					},
 				},
-			},
-		},
-		{
-			Name:        "verify-list",
-			Description: "List your linked player accounts.",
-		},
-		{
-			Name:        "verify-remove",
-			Description: "Unlink one of your player accounts.",
-			Options: []*discordgo.ApplicationCommandOption{
 				{
-					Type:         discordgo.ApplicationCommandOptionString,
-					Name:         "player",
-					Description:  "Linked player tag or name.",
-					Required:     true,
-					Autocomplete: true,
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "list",
+					Description: "List your linked player accounts.",
 				},
-			},
-		},
-		{
-			Name:        "verify-set-main",
-			Description: "Set your default player account.",
-			Options: []*discordgo.ApplicationCommandOption{
 				{
-					Type:         discordgo.ApplicationCommandOptionString,
-					Name:         "player",
-					Description:  "Linked player tag or name.",
-					Required:     true,
-					Autocomplete: true,
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "remove",
+					Description: "Unlink one of your player accounts.",
+					Options: []*discordgo.ApplicationCommandOption{
+						{
+							Type:         discordgo.ApplicationCommandOptionString,
+							Name:         "player",
+							Description:  "Linked player tag or name.",
+							Required:     true,
+							Autocomplete: true,
+						},
+					},
+				},
+				{
+					Type:        discordgo.ApplicationCommandOptionSubCommand,
+					Name:        "set-main",
+					Description: "Set your default player account.",
+					Options: []*discordgo.ApplicationCommandOption{
+						{
+							Type:         discordgo.ApplicationCommandOptionString,
+							Name:         "player",
+							Description:  "Linked player tag or name.",
+							Required:     true,
+							Autocomplete: true,
+						},
+					},
 				},
 			},
 		},
@@ -745,10 +802,9 @@ var (
 			ctx := getCommandContext(i)
 			commandName := strings.ToLower(strings.TrimSpace(stringOption(ctx.options, "command")))
 
-			embed := &discordgo.MessageEmbed{
-				Title:  "Available Commands",
-				Footer: &discordgo.MessageEmbedFooter{Text: time.Now().Format("2006-01-02 15:04:05")},
-			}
+			embed := withStatsEmbed(&discordgo.MessageEmbed{
+				Title: "Available Commands",
+			}, "", embedColorHelp)
 			if commandName != "" {
 				usage, found := helpUsageByCommand[commandName]
 				if !found {
@@ -770,10 +826,19 @@ var (
 		},
 		"clan": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
 			ctx := getCommandContext(i)
+			if ctx.subcommand != "stats" {
+				ephemeralText(s, i, "Unsupported clan subcommand.")
+				return
+			}
+
 			userID := interactionUserID(i)
 			clanTag, ok := resolveClanTag(userID, stringOption(ctx.options, "clan"))
 			if !ok || clanTag == "" {
-				ephemeralText(s, i, "Provide a clan tag/name or set a main account first.")
+				if len(listUserAccounts(userID)) == 0 {
+					ephemeralText(s, i, "Verify a player account first with `/verify verify`, or provide a clan tag.")
+					return
+				}
+				ephemeralText(s, i, "None of your linked accounts are in a clan. Provide a clan tag or join a clan in-game.")
 				return
 			}
 
@@ -787,124 +852,114 @@ var (
 			respondWithEmbed(s, i, buildClanOverviewEmbed(result.Data))
 		},
 		"player": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+			ctx := getCommandContext(i)
 			player, ok := resolveAndFetchPlayer(s, i)
 			if !ok {
 				return
 			}
-			respondWithEmbed(s, i, buildPlayerOverviewEmbed(player))
-		},
-		"player-equipment": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-			player, ok := resolveAndFetchPlayer(s, i)
-			if !ok {
-				return
+
+			switch ctx.subcommand {
+			case "profile":
+				respondWithEmbed(s, i, buildPlayerOverviewEmbed(player))
+			case "equipment":
+				respondWithEmbed(s, i, buildPlayerEquipmentProgressEmbed(player))
+			case "heroes":
+				respondWithEmbed(s, i, buildPlayerItemsEmbed(player, "Heroes", player.Heroes, "No heroes found."))
+			case "troops":
+				respondWithEmbed(s, i, buildPlayerItemsEmbed(player, "Troops", player.Troops, "No troops found."))
+			case "spells":
+				respondWithEmbed(s, i, buildPlayerItemsEmbed(player, "Spells", player.Spells, "No spells found."))
+			case "achievements":
+				respondWithEmbed(s, i, buildPlayerAchievementsEmbed(player))
+			case "upgrade-progress":
+				respondWithEmbed(s, i, buildPlayerUpgradeProgressEmbed(player))
+			default:
+				ephemeralText(s, i, "Unsupported player subcommand.")
 			}
-			respondWithEmbed(s, i, buildPlayerEquipmentProgressEmbed(player))
-		},
-		"player-heroes": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-			player, ok := resolveAndFetchPlayer(s, i)
-			if !ok {
-				return
-			}
-			respondWithEmbed(s, i, buildPlayerItemsEmbed(player, "Heroes", player.Heroes, "No heroes found."))
-		},
-		"player-troops": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-			player, ok := resolveAndFetchPlayer(s, i)
-			if !ok {
-				return
-			}
-			respondWithEmbed(s, i, buildPlayerItemsEmbed(player, "Troops", player.Troops, "No troops found."))
-		},
-		"player-spells": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-			player, ok := resolveAndFetchPlayer(s, i)
-			if !ok {
-				return
-			}
-			respondWithEmbed(s, i, buildPlayerItemsEmbed(player, "Spells", player.Spells, "No spells found."))
-		},
-		"player-achievements": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-			player, ok := resolveAndFetchPlayer(s, i)
-			if !ok {
-				return
-			}
-			respondWithEmbed(s, i, buildPlayerAchievementsEmbed(player))
-		},
-		"player-upgrade-progress": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-			player, ok := resolveAndFetchPlayer(s, i)
-			if !ok {
-				return
-			}
-			respondWithEmbed(s, i, buildPlayerUpgradeProgressEmbed(player))
 		},
 		"verify": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
 			ctx := getCommandContext(i)
 			userID := interactionUserID(i)
-			playerTag, ok := resolvePlayerTag(userID, stringOption(ctx.options, "player"))
-			if !ok || playerTag == "" {
-				ephemeralText(s, i, "Provide a valid player tag.")
-				return
-			}
-			_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-				Type: discordgo.InteractionResponseModal,
-				Data: &discordgo.InteractionResponseData{
-					CustomID: verifyTokenModalPrefix + playerTag,
-					Title:    "Verify Player Account",
-					Components: []discordgo.MessageComponent{
-						discordgo.ActionsRow{
-							Components: []discordgo.MessageComponent{
-								discordgo.TextInput{
-									CustomID:    verifyTokenInputID,
-									Label:       "Player API Token",
-									Style:       discordgo.TextInputShort,
-									Placeholder: "Paste one-time token from in-game settings",
-									Required:    true,
-									MinLength:   1,
-									MaxLength:   64,
+
+			switch ctx.subcommand {
+			case "verify":
+				playerTag, ok := resolvePlayerTag(userID, stringOption(ctx.options, "player"))
+				if !ok || playerTag == "" {
+					ephemeralText(s, i, "Provide a valid player tag.")
+					return
+				}
+				_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+					Type: discordgo.InteractionResponseModal,
+					Data: &discordgo.InteractionResponseData{
+						CustomID: verifyTokenModalPrefix + playerTag,
+						Title:    botWatermark + " · Verify Account",
+						Components: []discordgo.MessageComponent{
+							discordgo.ActionsRow{
+								Components: []discordgo.MessageComponent{
+									discordgo.TextInput{
+										CustomID:    verifyTokenInputID,
+										Label:       "In-Game API Token",
+										Style:       discordgo.TextInputShort,
+										Placeholder: "Settings → More Settings → API Token",
+										Required:    true,
+										MinLength:   1,
+										MaxLength:   64,
+									},
 								},
 							},
 						},
 					},
-				},
-			})
-		},
-		"verify-list": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-			userID := interactionUserID(i)
-			accounts := listUserAccounts(userID)
-			mainTag, _ := getUserMainAccount(userID)
-			if len(accounts) == 0 {
-				respondWithEphemeralEmbed(s, i, buildStatusEmbed("Linked Accounts", "No linked accounts yet. Use `/verify player:<tag>` to start."))
-				return
+				})
+			case "list":
+				accounts := listUserAccounts(userID)
+				mainTag, _ := getUserMainAccount(userID)
+				if len(accounts) == 0 {
+					respondWithEphemeralEmbed(s, i, buildStatusEmbed(
+						"Linked Accounts",
+						"No linked accounts yet. Use `/verify verify` with a player tag to start.",
+						"",
+						embedColorSuccess,
+					))
+					return
+				}
+				respondWithEphemeralEmbed(s, i, buildVerifyListEmbed(accounts, mainTag))
+			case "remove":
+				playerTag, ok := resolvePlayerTag(userID, stringOption(ctx.options, "player"))
+				if !ok || playerTag == "" {
+					ephemeralText(s, i, "Provide a linked account to remove.")
+					return
+				}
+				if !userHasAccount(userID, playerTag) {
+					ephemeralText(s, i, "That player is not linked to your account.")
+					return
+				}
+				_ = removeUserAccount(userID, playerTag)
+				respondWithEphemeralEmbed(s, i, buildStatusEmbed(
+					"Account Removed",
+					"Removed linked account `"+playerTag+"`.",
+					"",
+					embedColorSuccess,
+				))
+			case "set-main":
+				playerTag, ok := resolvePlayerTag(userID, stringOption(ctx.options, "player"))
+				if !ok || playerTag == "" {
+					ephemeralText(s, i, "Provide one of your linked accounts.")
+					return
+				}
+				if !userHasAccount(userID, playerTag) {
+					ephemeralText(s, i, "That player is not linked to your account.")
+					return
+				}
+				_ = setMainUserAccount(userID, playerTag)
+				respondWithEphemeralEmbed(s, i, buildStatusEmbed(
+					"Main Account Updated",
+					"Set `"+playerTag+"` as your main account.",
+					"",
+					embedColorSuccess,
+				))
+			default:
+				ephemeralText(s, i, "Unsupported verify subcommand.")
 			}
-			respondWithEphemeralEmbed(s, i, buildVerifyListEmbed(accounts, mainTag))
-		},
-		"verify-remove": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-			ctx := getCommandContext(i)
-			userID := interactionUserID(i)
-			playerTag, ok := resolvePlayerTag(userID, stringOption(ctx.options, "player"))
-			if !ok || playerTag == "" {
-				ephemeralText(s, i, "Provide a linked account to remove.")
-				return
-			}
-			if !userHasAccount(userID, playerTag) {
-				ephemeralText(s, i, "That player is not linked to your account.")
-				return
-			}
-			_ = removeUserAccount(userID, playerTag)
-			respondWithEphemeralEmbed(s, i, buildStatusEmbed("Account Removed", "Removed linked account "+playerTag+"."))
-		},
-		"verify-set-main": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-			ctx := getCommandContext(i)
-			userID := interactionUserID(i)
-			playerTag, ok := resolvePlayerTag(userID, stringOption(ctx.options, "player"))
-			if !ok || playerTag == "" {
-				ephemeralText(s, i, "Provide one of your linked accounts.")
-				return
-			}
-			if !userHasAccount(userID, playerTag) {
-				ephemeralText(s, i, "That player is not linked to your account.")
-				return
-			}
-			_ = setMainUserAccount(userID, playerTag)
-			respondWithEphemeralEmbed(s, i, buildStatusEmbed("Main Account Updated", "Set "+playerTag+" as your main account."))
 		},
 	}
 )

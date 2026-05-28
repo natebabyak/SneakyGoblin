@@ -286,6 +286,23 @@ func getPlayerTagByName(name string) (string, bool) {
 	return tag, true
 }
 
+func getKnownClanTagForPlayer(playerTag string) (string, bool) {
+	if db == nil {
+		return "", false
+	}
+	var clanTag string
+	err := db.QueryRow(
+		`SELECT clan_tag FROM known_players
+		 WHERE player_tag = ? AND clan_tag != ''
+		 LIMIT 1`,
+		normalizeTag(playerTag),
+	).Scan(&clanTag)
+	if err != nil {
+		return "", false
+	}
+	return normalizeTag(clanTag), true
+}
+
 func getClanTagByName(name string) (string, bool) {
 	if db == nil || strings.TrimSpace(name) == "" {
 		return "", false
