@@ -67,6 +67,8 @@ func main() {
 				handleClanWarButton(s, i)
 			case strings.HasPrefix(customID, clanTabPrefix):
 				handleClanTabButton(s, i)
+			case strings.HasPrefix(customID, playerTabPrefix):
+				handlePlayerTabButton(s, i)
 			case strings.HasPrefix(customID, playerAchSortPrefix):
 				handlePlayerAchievementsSortSelect(s, i)
 			case strings.HasPrefix(customID, playerAchPrefix):

@@ -17,10 +17,12 @@ type commandContext struct {
 }
 
 const (
-	verifyTokenModalPrefix = "verify:verify:"
+	verifyTokenModalPrefix = "verify:"
 	verifyTokenInputID     = "token"
 	botWatermark           = "SneakyGoblin"
 	embedColor             = 0x00C950
+	cocAssetBase           = "https://assets.clashk.ing/"
+	helpDisclaimer         = "\n\n---\nThis material is unofficial and is not endorsed by Supercell. For more information see Supercell's Fan Content Policy: www.supercell.com/fan-content-policy."
 	clanTabPrefix          = "clan-tab:"
 	clanTabOverview        = "overview"
 	clanTabMembers         = "members"
@@ -33,11 +35,18 @@ const (
 	clanMembersPerPage     = 15
 	clanWarsPerPage        = 15
 	clanMemberDefaultSort  = "league-trophies"
-	clanWarDefaultSort        = "date"
-	playerAchPrefix           = "player-ach:"
-	playerAchSortPrefix       = "player-ach-sort:"
+	clanWarDefaultSort     = "date"
+	playerTabPrefix        = "player-tab:"
+	playerTabOverview      = "overview"
+	playerTabEquipment     = "equipment"
+	playerTabHeroes        = "heroes"
+	playerTabSpells        = "spells"
+	playerTabTroops        = "troops"
+	playerTabAchievements  = "achievements"
+	playerAchPrefix        = "player-ach:"
+	playerAchSortPrefix    = "player-ach-sort:"
 	playerAchievementsPerPage = 15
-	playerAchDefaultSort      = "default"
+	playerAchDefaultSort   = "default"
 )
 
 type clanPanelState struct {
@@ -212,7 +221,7 @@ func handleVerifyTokenModalSubmit(s *discordgo.Session, i *discordgo.Interaction
 		buildStatusEmbed(
 			playerResult.Data.Name,
 			embedDescriptionWithTag(playerResult.Data.Tag, "Verified and linked to your Discord account."),
-			playerThumbnailURL(playerResult.Data),
+			commandThumbnailURL("verify", playerResult.Data),
 		),
 	)
 }
@@ -313,23 +322,46 @@ func clanBadgeURL(clan Clan) string {
 	return clan.BadgeUrls.Small
 }
 
-func playerThumbnailURL(player Player) string {
-	if player.LeagueTier.IconUrls.Large != "" {
-		return player.LeagueTier.IconUrls.Large
-	}
-	if player.LeagueTier.IconUrls.Small != "" {
-		return player.LeagueTier.IconUrls.Small
-	}
-	if player.League.IconUrls.Small != "" {
-		return player.League.IconUrls.Small
-	}
-	if player.League.IconUrls.Tiny != "" {
-		return player.League.IconUrls.Tiny
-	}
+func cocAssetURL(path string) string {
+	return cocAssetBase + path
+}
+
+func playerClanBadgeURL(player Player) string {
 	if player.Player.BadgeUrls.Medium != "" {
 		return player.Player.BadgeUrls.Medium
 	}
-	return player.Player.BadgeUrls.Large
+	if player.Player.BadgeUrls.Large != "" {
+		return player.Player.BadgeUrls.Large
+	}
+	return player.Player.BadgeUrls.Small
+}
+
+func commandThumbnailURL(kind string, player Player) string {
+	switch kind {
+	case "profile":
+		if u := playerClanBadgeURL(player); u != "" {
+			return u
+		}
+		return cocAssetURL("buildings/town-hall/icon.webp")
+	case "equipment":
+		return cocAssetURL("equipment/barbarian-puppet/icon.webp")
+	case "heroes":
+		return cocAssetURL("heroes/barbarian-king/icon.webp")
+	case "troops":
+		return cocAssetURL("troops/barbarian/icon.webp")
+	case "spells":
+		return cocAssetURL("spells/rage/icon.webp")
+	case "achievements":
+		return cocAssetURL("achievements/stars-3.webp")
+	case "verify":
+		return cocAssetURL("ui/icon-shield.webp")
+	case "help":
+		return botAvatarURL
+	case "clan":
+		return ""
+	default:
+		return playerClanBadgeURL(player)
+	}
 }
 
 func buildStatusEmbed(title, description, thumbnailURL string) *discordgo.MessageEmbed {
@@ -339,20 +371,79 @@ func buildStatusEmbed(title, description, thumbnailURL string) *discordgo.Messag
 	}, thumbnailURL)
 }
 
-func playerSubcommand(name, description string) *discordgo.ApplicationCommandOption {
+func optionalPlayerOption(description string) *discordgo.ApplicationCommandOption {
+	return &discordgo.ApplicationCommandOption{
+		Type:         discordgo.ApplicationCommandOptionString,
+		Name:         "player",
+		Description:  description,
+		Required:     false,
+		Autocomplete: true,
+	}
+}
+
+func optionalClanOption(description string) *discordgo.ApplicationCommandOption {
+	return &discordgo.ApplicationCommandOption{
+		Type:         discordgo.ApplicationCommandOptionString,
+		Name:         "clan",
+		Description:  description,
+		Required:     false,
+		Autocomplete: true,
+	}
+}
+
+func playerPageSubcommand(name, description string) *discordgo.ApplicationCommandOption {
 	return &discordgo.ApplicationCommandOption{
 		Type:        discordgo.ApplicationCommandOptionSubCommand,
 		Name:        name,
 		Description: description,
-		Options: []*discordgo.ApplicationCommandOption{
-			{
-				Type:         discordgo.ApplicationCommandOptionString,
-				Name:         "player",
-				Description:  "Player tag or known player name.",
-				Required:     false,
-				Autocomplete: true,
-			},
-		},
+		Options:     []*discordgo.ApplicationCommandOption{optionalPlayerOption("Player tag or known player name.")},
+	}
+}
+
+func clanPageSubcommand(name, description string) *discordgo.ApplicationCommandOption {
+	return &discordgo.ApplicationCommandOption{
+		Type:        discordgo.ApplicationCommandOptionSubCommand,
+		Name:        name,
+		Description: description,
+		Options:     []*discordgo.ApplicationCommandOption{optionalClanOption("Clan tag or known clan name.")},
+	}
+}
+
+func possessiveTitle(name, section string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return section
+	}
+	return name + "'s " + section
+}
+
+func playerTabFromSubcommand(subcommand string) string {
+	switch subcommand {
+	case "equipment":
+		return playerTabEquipment
+	case "heroes":
+		return playerTabHeroes
+	case "spells":
+		return playerTabSpells
+	case "troops":
+		return playerTabTroops
+	case "achievements":
+		return playerTabAchievements
+	default:
+		return playerTabOverview
+	}
+}
+
+func clanTabFromSubcommand(subcommand string) string {
+	switch subcommand {
+	case "members":
+		return clanTabMembers
+	case "wars":
+		return clanTabWars
+	case "capital":
+		return clanTabCapital
+	default:
+		return clanTabOverview
 	}
 }
 
@@ -465,26 +556,6 @@ func resolveClanTag(discordUserID, input string) (string, bool) {
 	return normalizeTag(matches[0].Tag), true
 }
 
-func makeProgressField(name string, items []PlayerItemLevel) *discordgo.MessageEmbedField {
-	if len(items) == 0 {
-		return &discordgo.MessageEmbedField{Name: name, Value: "No data available."}
-	}
-	completed := 0
-	lines := make([]string, 0, len(items))
-	for _, item := range items {
-		if item.MaxLevel > 0 && item.Level >= item.MaxLevel {
-			completed++
-		}
-		lines = append(lines, fmt.Sprintf("%s %d/%d", item.Name, item.Level, item.MaxLevel))
-	}
-	if len(lines) > 8 {
-		lines = lines[:8]
-	}
-	percent := float64(completed) / float64(len(items)) * 100
-	value := fmt.Sprintf("Completed: %d/%d (%.0f%%)\n%s", completed, len(items), percent, strings.Join(lines, "\n"))
-	return &discordgo.MessageEmbedField{Name: name, Value: value}
-}
-
 func buildClanOverviewEmbed(clan Clan) *discordgo.MessageEmbed {
 	labels := make([]string, 0, len(clan.Labels))
 	for _, label := range clan.Labels {
@@ -497,7 +568,7 @@ func buildClanOverviewEmbed(clan Clan) *discordgo.MessageEmbed {
 	}
 
 	return withStatsEmbed(&discordgo.MessageEmbed{
-		Title:       clan.Name,
+		Title:       possessiveTitle(clan.Name, "Overview"),
 		Description: embedDescriptionWithTag(clan.Tag, clan.Description),
 		Fields: []*discordgo.MessageEmbedField{
 			{Name: "Members", Value: fmt.Sprintf("%d", clan.Members), Inline: true},
@@ -1199,7 +1270,7 @@ func buildClanMembersEmbed(clan Clan, page int, sortKey string) (*discordgo.Mess
 	result := getClanMembers(clan.Tag)
 	if !result.OK {
 		return withStatsEmbed(&discordgo.MessageEmbed{
-			Title:       clan.Name,
+			Title:       possessiveTitle(clan.Name, "Members"),
 			Description: embedDescriptionWithTag(clan.Tag, "Could not load members: "+result.Error),
 		}, clanBadgeURL(clan)), 1
 	}
@@ -1239,7 +1310,7 @@ func buildClanMembersEmbed(clan Clan, page int, sortKey string) (*discordgo.Mess
 	}
 
 	return withStatsEmbed(&discordgo.MessageEmbed{
-		Title:       clan.Name,
+		Title:       possessiveTitle(clan.Name, "Members"),
 		Description: embedDescriptionWithTag(clan.Tag, meta),
 		Fields:      clanMemberTableFields(pageMembers, sortKey, start),
 	}, clanBadgeURL(clan)), totalPages
@@ -1281,7 +1352,7 @@ func buildClanWarsEmbed(clan Clan, page int, sortKey string) (*discordgo.Message
 			sections = append(sections, "### War Log", msg)
 		}
 		return withStatsEmbed(&discordgo.MessageEmbed{
-			Title:       clan.Name,
+			Title:       possessiveTitle(clan.Name, "Wars"),
 			Description: embedDescriptionWithTag(clan.Tag, strings.Join(sections, "\n")),
 		}, clanBadgeURL(clan)), 1
 	}
@@ -1324,7 +1395,7 @@ func buildClanWarsEmbed(clan Clan, page int, sortKey string) (*discordgo.Message
 	sections = append(sections, meta)
 
 	embed := withStatsEmbed(&discordgo.MessageEmbed{
-		Title:       clan.Name,
+		Title:       possessiveTitle(clan.Name, "Wars"),
 		Description: embedDescriptionWithTag(clan.Tag, strings.Join(sections, "\n")),
 		Fields:      clanWarTableFields(pageEntries, start),
 	}, clanBadgeURL(clan))
@@ -1356,7 +1427,7 @@ func buildClanCapitalEmbed(clan Clan) *discordgo.MessageEmbed {
 	}
 
 	return withStatsEmbed(&discordgo.MessageEmbed{
-		Title:       clan.Name,
+		Title:       possessiveTitle(clan.Name, "Clan Capital"),
 		Description: embedDescriptionWithTag(clan.Tag, "### Clan Capital"),
 		Fields:      fields,
 	}, clanBadgeURL(clan))
@@ -1524,10 +1595,11 @@ func respondClanWarPanel(s *discordgo.Session, i *discordgo.InteractionCreate, t
 func handleClanCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	ctx := getCommandContext(i)
 	userID := interactionUserID(i)
+	tab := clanTabFromSubcommand(ctx.subcommand)
 	clanTag, ok := resolveClanTag(userID, stringOption(ctx.options, "clan"))
 	if !ok || clanTag == "" {
 		if len(listUserAccounts(userID)) == 0 {
-			ephemeralText(s, i, "Verify a player account first with `/verify verify`, or provide a clan tag.")
+			ephemeralText(s, i, "Verify a player account first with `/verify add`, or provide a clan tag.")
 			return
 		}
 		ephemeralText(s, i, "None of your linked accounts are in a clan. Provide a clan tag or join a clan in-game.")
@@ -1542,73 +1614,47 @@ func handleClanCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 	upsertKnownClan(result.Data)
 	recordCommandUsage(userID, "clan", result.Data.Tag)
-	embed, state := buildClanTabEmbed(result.Data, clanTabOverview, defaultClanPanelState())
-	sendClanPanel(s, i, embed, result.Data.Tag, clanTabOverview, state, false)
+	state := defaultClanPanelState()
+	if tab == clanTabMembers {
+		state.memPage, state.memSort = 0, clanMemberDefaultSort
+	}
+	if tab == clanTabWars {
+		state.warPage, state.warSort = 0, clanWarDefaultSort
+	}
+	embed, state := buildClanTabEmbed(result.Data, tab, state)
+	sendClanPanel(s, i, embed, result.Data.Tag, tab, state, false)
 }
 
-func buildPlayerOverviewEmbed(player Player) *discordgo.MessageEmbed {
+func buildPlayerOverviewFields(player Player) []*discordgo.MessageEmbedField {
 	clanName := "No clan"
 	if player.Player.Name != "" {
 		clanName = player.Player.Name
 	}
-	return withStatsEmbed(&discordgo.MessageEmbed{
-		Title:       player.Name,
-		Description: tagSubheading(player.Tag),
-		Fields: []*discordgo.MessageEmbedField{
-			{Name: "Town Hall", Value: fmt.Sprintf("%d", player.TownHallLevel), Inline: true},
-			{Name: "TH Weapon", Value: fmt.Sprintf("%d", player.TownHallWeaponLevel), Inline: true},
-			{Name: "Exp Level", Value: fmt.Sprintf("%d", player.ExpLevel), Inline: true},
-			{Name: "Trophies", Value: fmt.Sprintf("%d", player.Trophies), Inline: true},
-			{Name: "Best Trophies", Value: fmt.Sprintf("%d", player.BestTrophies), Inline: true},
-			{Name: "War Stars", Value: fmt.Sprintf("%d", player.WarStars), Inline: true},
-			{Name: "Clan", Value: clanName, Inline: true},
-			{Name: "Role", Value: string(player.Role), Inline: true},
-			{Name: "War Preference", Value: string(player.WarPreference), Inline: true},
-			{Name: "Attack Wins", Value: fmt.Sprintf("%d", player.AttackWins), Inline: true},
-			{Name: "Defense Wins", Value: fmt.Sprintf("%d", player.DefenseWins), Inline: true},
-			{Name: "Donations", Value: fmt.Sprintf("%d", player.Donations), Inline: true},
-			{Name: "Received", Value: fmt.Sprintf("%d", player.DonationsReceived), Inline: true},
-			{Name: "Builder Hall", Value: fmt.Sprintf("%d", player.BuilderHallLevel), Inline: true},
-			{Name: "Builder Trophies", Value: fmt.Sprintf("%d", player.BuilderBaseTrophies), Inline: true},
-			{Name: "Best Builder", Value: fmt.Sprintf("%d", player.BestBuilderBaseTrophies), Inline: true},
-			{Name: "Capital Contributions", Value: fmt.Sprintf("%d", player.ClanCapitalContributions), Inline: true},
-			{Name: "League", Value: player.League.Name, Inline: true},
-			{Name: "Builder League", Value: player.BuilderBaseLeague.Name, Inline: true},
-			{Name: "Legend Trophies", Value: fmt.Sprintf("%d", player.LegendStatistics.LegendTrophies), Inline: true},
-		},
-	}, playerThumbnailURL(player))
+	return []*discordgo.MessageEmbedField{
+		{Name: "Town Hall", Value: fmt.Sprintf("%d", player.TownHallLevel), Inline: true},
+		{Name: "TH Weapon", Value: fmt.Sprintf("%d", player.TownHallWeaponLevel), Inline: true},
+		{Name: "Exp Level", Value: fmt.Sprintf("%d", player.ExpLevel), Inline: true},
+		{Name: "Trophies", Value: fmt.Sprintf("%d", player.Trophies), Inline: true},
+		{Name: "Best Trophies", Value: fmt.Sprintf("%d", player.BestTrophies), Inline: true},
+		{Name: "War Stars", Value: fmt.Sprintf("%d", player.WarStars), Inline: true},
+		{Name: "Clan", Value: clanName, Inline: true},
+		{Name: "Role", Value: string(player.Role), Inline: true},
+		{Name: "War Preference", Value: string(player.WarPreference), Inline: true},
+		{Name: "Attack Wins", Value: fmt.Sprintf("%d", player.AttackWins), Inline: true},
+		{Name: "Defense Wins", Value: fmt.Sprintf("%d", player.DefenseWins), Inline: true},
+		{Name: "Donations", Value: fmt.Sprintf("%d", player.Donations), Inline: true},
+		{Name: "Received", Value: fmt.Sprintf("%d", player.DonationsReceived), Inline: true},
+		{Name: "Builder Hall", Value: fmt.Sprintf("%d", player.BuilderHallLevel), Inline: true},
+		{Name: "Builder Trophies", Value: fmt.Sprintf("%d", player.BuilderBaseTrophies), Inline: true},
+		{Name: "Best Builder", Value: fmt.Sprintf("%d", player.BestBuilderBaseTrophies), Inline: true},
+		{Name: "Capital Contributions", Value: fmt.Sprintf("%d", player.ClanCapitalContributions), Inline: true},
+		{Name: "League", Value: player.League.Name, Inline: true},
+		{Name: "Builder League", Value: player.BuilderBaseLeague.Name, Inline: true},
+		{Name: "Legend Trophies", Value: fmt.Sprintf("%d", player.LegendStatistics.LegendTrophies), Inline: true},
+	}
 }
 
-func buildPlayerEquipmentProgressEmbed(player Player) *discordgo.MessageEmbed {
-	lines := make([]string, 0, len(player.HeroEquipment))
-	for _, item := range player.HeroEquipment {
-		lines = append(lines, fmt.Sprintf("%s %d/%d", item.Name, item.Level, item.MaxLevel))
-	}
-	if len(lines) == 0 {
-		lines = append(lines, "No hero equipment found.")
-	}
-	if len(lines) > 15 {
-		lines = lines[:15]
-	}
-	return withStatsEmbed(&discordgo.MessageEmbed{
-		Title:       player.Name,
-		Description: embedDescriptionWithTag(player.Tag, "### Player Equipment\n"+strings.Join(lines, "\n")),
-	}, playerThumbnailURL(player))
-}
-
-func buildPlayerUpgradeProgressEmbed(player Player) *discordgo.MessageEmbed {
-	return withStatsEmbed(&discordgo.MessageEmbed{
-		Title:       player.Name,
-		Description: embedDescriptionWithTag(player.Tag, "### Upgrade Progress"),
-		Fields: []*discordgo.MessageEmbedField{
-			makeProgressField("Troops", player.Troops),
-			makeProgressField("Heroes", player.Heroes),
-			makeProgressField("Spells", player.Spells),
-		},
-	}, playerThumbnailURL(player))
-}
-
-func buildPlayerItemsEmbed(player Player, title string, items []PlayerItemLevel, emptyMessage string) *discordgo.MessageEmbed {
+func formatPlayerItemLines(items []PlayerItemLevel, emptyMessage string, limit int) string {
 	lines := make([]string, 0, len(items))
 	for _, item := range items {
 		line := fmt.Sprintf("%s %d/%d", item.Name, item.Level, item.MaxLevel)
@@ -1618,15 +1664,163 @@ func buildPlayerItemsEmbed(player Player, title string, items []PlayerItemLevel,
 		lines = append(lines, line)
 	}
 	if len(lines) == 0 {
-		lines = append(lines, emptyMessage)
+		return emptyMessage
 	}
-	if len(lines) > 20 {
-		lines = lines[:20]
+	if len(lines) > limit {
+		lines = lines[:limit]
 	}
-	return withStatsEmbed(&discordgo.MessageEmbed{
-		Title:       player.Name,
-		Description: embedDescriptionWithTag(player.Tag, "### "+title+"\n"+strings.Join(lines, "\n")),
-	}, playerThumbnailURL(player))
+	return strings.Join(lines, "\n")
+}
+
+func playerTabButtonID(tab, tag string) string {
+	return playerTabPrefix + tab + ":" + strings.TrimPrefix(normalizeTag(tag), "#")
+}
+
+func parsePlayerTabButtonID(customID string) (tab, tag string, ok bool) {
+	if !strings.HasPrefix(customID, playerTabPrefix) {
+		return "", "", false
+	}
+	rest := strings.TrimPrefix(customID, playerTabPrefix)
+	parts := strings.SplitN(rest, ":", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return parts[0], normalizeTag(parts[1]), true
+}
+
+func playerTabComponents(tag, activeTab string) []discordgo.MessageComponent {
+	tabs := []struct {
+		id    string
+		label string
+	}{
+		{playerTabOverview, "Overview"},
+		{playerTabTroops, "Troops"},
+		{playerTabHeroes, "Heroes"},
+		{playerTabSpells, "Spells"},
+		{playerTabEquipment, "Equipment"},
+		{playerTabAchievements, "Achievements"},
+	}
+	const perRow = 3
+	rows := make([]discordgo.MessageComponent, 0, (len(tabs)+perRow-1)/perRow)
+	for start := 0; start < len(tabs); start += perRow {
+		end := start + perRow
+		if end > len(tabs) {
+			end = len(tabs)
+		}
+		buttons := make([]discordgo.MessageComponent, 0, end-start)
+		for _, tab := range tabs[start:end] {
+			buttons = append(buttons, discordgo.Button{
+				Label:    tab.label,
+				Style:    discordgo.SecondaryButton,
+				CustomID: playerTabButtonID(tab.id, tag),
+				Disabled: tab.id == activeTab,
+			})
+		}
+		rows = append(rows, discordgo.ActionsRow{Components: buttons})
+	}
+	return rows
+}
+
+func playerPanelComponents(tag, activeTab string, achPage, achTotalPages int, achSort string) []discordgo.MessageComponent {
+	rows := playerTabComponents(tag, activeTab)
+	if activeTab == playerTabAchievements {
+		rows = append(rows, playerAchPanelComponents(tag, achPage, achTotalPages, achSort)...)
+	}
+	return rows
+}
+
+func buildPlayerPanelEmbed(player Player, tab string, achPage int, achSort string) (*discordgo.MessageEmbed, int) {
+	switch tab {
+	case playerTabOverview:
+		return withStatsEmbed(&discordgo.MessageEmbed{
+			Title:       possessiveTitle(player.Name, "Overview"),
+			Description: tagSubheading(player.Tag),
+			Fields:      buildPlayerOverviewFields(player),
+		}, commandThumbnailURL("profile", player)), 1
+	case playerTabEquipment:
+		return withStatsEmbed(&discordgo.MessageEmbed{
+			Title:       possessiveTitle(player.Name, "Equipment"),
+			Description: embedDescriptionWithTag(player.Tag, formatPlayerItemLines(player.HeroEquipment, "No hero equipment found.", 20)),
+		}, commandThumbnailURL("equipment", player)), 1
+	case playerTabHeroes:
+		return withStatsEmbed(&discordgo.MessageEmbed{
+			Title:       possessiveTitle(player.Name, "Heroes"),
+			Description: embedDescriptionWithTag(player.Tag, formatPlayerItemLines(player.Heroes, "No heroes found.", 20)),
+		}, commandThumbnailURL("heroes", player)), 1
+	case playerTabSpells:
+		return withStatsEmbed(&discordgo.MessageEmbed{
+			Title:       possessiveTitle(player.Name, "Spells"),
+			Description: embedDescriptionWithTag(player.Tag, formatPlayerItemLines(player.Spells, "No spells found.", 20)),
+		}, commandThumbnailURL("spells", player)), 1
+	case playerTabAchievements:
+		embed, totalPages := buildPlayerAchievementsEmbed(player, achPage, achSort)
+		return embed, totalPages
+	default:
+		return withStatsEmbed(&discordgo.MessageEmbed{
+			Title:       possessiveTitle(player.Name, "Troops"),
+			Description: embedDescriptionWithTag(player.Tag, formatPlayerItemLines(player.Troops, "No troops found.", 20)),
+		}, commandThumbnailURL("troops", player)), 1
+	}
+}
+
+func sendPlayerPanel(s *discordgo.Session, i *discordgo.InteractionCreate, player Player, tab string, achPage int, achSort string, update bool) {
+	if tab == "" {
+		tab = playerTabOverview
+	}
+	achSort = normalizePlayerAchSort(achSort)
+	embed, totalPages := buildPlayerPanelEmbed(player, tab, achPage, achSort)
+	if tab == playerTabAchievements && achPage >= totalPages {
+		achPage = totalPages - 1
+		if achPage < 0 {
+			achPage = 0
+		}
+		embed, totalPages = buildPlayerPanelEmbed(player, tab, achPage, achSort)
+	}
+
+	responseType := discordgo.InteractionResponseChannelMessageWithSource
+	if update {
+		responseType = discordgo.InteractionResponseUpdateMessage
+	}
+	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: responseType,
+		Data: &discordgo.InteractionResponseData{
+			Embeds:     []*discordgo.MessageEmbed{embed},
+			Components: playerPanelComponents(player.Tag, tab, achPage, totalPages, achSort),
+		},
+	})
+}
+
+func handlePlayerTabButton(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	tab, tag, ok := parsePlayerTabButtonID(i.MessageComponentData().CustomID)
+	if !ok {
+		return
+	}
+
+	result := getPlayerByTag(tag)
+	if !result.OK {
+		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseUpdateMessage,
+			Data: &discordgo.InteractionResponseData{
+				Embeds: []*discordgo.MessageEmbed{withStatsEmbed(&discordgo.MessageEmbed{
+					Title:       "Player Unavailable",
+					Description: result.Error,
+				}, "")},
+				Components: playerTabComponents(tag, tab),
+			},
+		})
+		return
+	}
+
+	sendPlayerPanel(s, i, result.Data, tab, 0, playerAchDefaultSort, true)
+}
+
+func handlePlayerCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	ctx := getCommandContext(i)
+	player, ok := resolveAndFetchPlayer(s, i)
+	if !ok {
+		return
+	}
+	sendPlayerPanel(s, i, player, playerTabFromSubcommand(ctx.subcommand), 0, playerAchDefaultSort, false)
 }
 
 var playerAchievementSorts = []struct {
@@ -1771,9 +1965,9 @@ func buildPlayerAchievementsEmbed(player Player, page int, sortKey string) (*dis
 	}
 
 	return withStatsEmbed(&discordgo.MessageEmbed{
-		Title:       player.Name,
+		Title:       possessiveTitle(player.Name, "Achievements"),
 		Description: embedDescriptionWithTag(player.Tag, strings.Join(lines, "\n")),
-	}, playerThumbnailURL(player)), totalPages
+	}, commandThumbnailURL("achievements", player)), totalPages
 }
 
 func playerAchButtonID(action, tag, sort string, page int) string {
@@ -1857,25 +2051,27 @@ func playerAchPanelComponents(tag string, page, totalPages int, sort string) []d
 	}
 }
 
-func sendPlayerAchievementsPanel(s *discordgo.Session, i *discordgo.InteractionCreate, player Player, page int, sort string, update bool) {
-	sort = normalizePlayerAchSort(sort)
-	embed, totalPages := buildPlayerAchievementsEmbed(player, page, sort)
-	if page >= totalPages {
-		page = totalPages - 1
-		embed, totalPages = buildPlayerAchievementsEmbed(player, page, sort)
+func respondPlayerAchievementsPanel(s *discordgo.Session, i *discordgo.InteractionCreate, tag string, page int, sort string) {
+	if page < 0 {
+		page = 0
 	}
 
-	responseType := discordgo.InteractionResponseChannelMessageWithSource
-	if update {
-		responseType = discordgo.InteractionResponseUpdateMessage
+	result := getPlayerByTag(tag)
+	if !result.OK {
+		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseUpdateMessage,
+			Data: &discordgo.InteractionResponseData{
+				Embeds: []*discordgo.MessageEmbed{withStatsEmbed(&discordgo.MessageEmbed{
+					Title:       "Player Unavailable",
+					Description: result.Error,
+				}, "")},
+				Components: playerPanelComponents(tag, playerTabAchievements, page, 1, sort),
+			},
+		})
+		return
 	}
-	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: responseType,
-		Data: &discordgo.InteractionResponseData{
-			Embeds:     []*discordgo.MessageEmbed{embed},
-			Components: playerAchPanelComponents(player.Tag, page, totalPages, sort),
-		},
-	})
+
+	sendPlayerPanel(s, i, result.Data, playerTabAchievements, page, sort, true)
 }
 
 func handlePlayerAchievementsButton(s *discordgo.Session, i *discordgo.InteractionCreate) {
@@ -1911,28 +2107,6 @@ func handlePlayerAchievementsSortSelect(s *discordgo.Session, i *discordgo.Inter
 	respondPlayerAchievementsPanel(s, i, tag, 0, normalizePlayerAchSort(values[0]))
 }
 
-func respondPlayerAchievementsPanel(s *discordgo.Session, i *discordgo.InteractionCreate, tag string, page int, sort string) {
-	if page < 0 {
-		page = 0
-	}
-
-	result := getPlayerByTag(tag)
-	if !result.OK {
-		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionResponseUpdateMessage,
-			Data: &discordgo.InteractionResponseData{
-				Embeds: []*discordgo.MessageEmbed{withStatsEmbed(&discordgo.MessageEmbed{
-					Title:       "Player Unavailable",
-					Description: result.Error,
-				}, "")},
-			},
-		})
-		return
-	}
-
-	sendPlayerAchievementsPanel(s, i, result.Data, page, sort, true)
-}
-
 func buildVerifyListEmbed(accounts []string, mainTag string) *discordgo.MessageEmbed {
 	lines := make([]string, 0, len(accounts))
 	for _, tag := range accounts {
@@ -1948,7 +2122,7 @@ func buildVerifyListEmbed(accounts []string, mainTag string) *discordgo.MessageE
 	return withStatsEmbed(&discordgo.MessageEmbed{
 		Title:       "Linked Accounts",
 		Description: strings.Join(lines, "\n"),
-	}, "")
+	}, commandThumbnailURL("verify", Player{}))
 }
 
 func userHasAccount(discordUserID, tag string) bool {
@@ -1961,13 +2135,13 @@ func userHasAccount(discordUserID, tag string) bool {
 	return false
 }
 
-func resolveAndFetchPlayer(s *discordgo.Session, i *discordgo.InteractionCreate) (Player, bool) {
+func resolveAndFetchPlayerForCommand(s *discordgo.Session, i *discordgo.InteractionCreate, usageEntity string) (Player, bool) {
 	ctx := getCommandContext(i)
 	userID := interactionUserID(i)
 
 	playerTag, ok := resolvePlayerTag(userID, stringOption(ctx.options, "player"))
 	if !ok || playerTag == "" {
-		ephemeralText(s, i, "Provide a player tag/name or set a main account with `/verify set-main`.")
+		ephemeralText(s, i, "Provide a player tag/name or set a main account with `/verify main`.")
 		return Player{}, false
 	}
 
@@ -1982,24 +2156,32 @@ func resolveAndFetchPlayer(s *discordgo.Session, i *discordgo.InteractionCreate)
 	if player.Player.Tag != "" && player.Player.Name != "" {
 		upsertKnownClan(Clan{Tag: player.Player.Tag, Name: player.Player.Name})
 	}
-	recordCommandUsage(userID, "player", player.Tag)
+	recordCommandUsage(userID, usageEntity, player.Tag)
 	return player, true
 }
 
+func resolveAndFetchPlayer(s *discordgo.Session, i *discordgo.InteractionCreate) (Player, bool) {
+	return resolveAndFetchPlayerForCommand(s, i, "player")
+}
+
 var helpUsageByCommand = map[string]string{
-	"clan":                    "/clan [clan]",
-	"help":                    "/help [command]",
-	"player profile":          "/player profile [player]",
-	"player achievements":     "/player achievements [player]",
-	"player equipment":        "/player equipment [player]",
-	"player heroes":           "/player heroes [player]",
-	"player spells":           "/player spells [player]",
-	"player troops":           "/player troops [player]",
-	"player upgrade-progress": "/player upgrade-progress [player]",
-	"verify verify":           "/verify verify player",
-	"verify list":             "/verify list",
-	"verify remove":           "/verify remove player",
-	"verify set-main":         "/verify set-main player",
+	"clan":              "/clan overview [clan]",
+	"clan capital":      "/clan capital [clan]",
+	"clan members":      "/clan members [clan]",
+	"clan overview":     "/clan overview [clan]",
+	"clan wars":         "/clan wars [clan]",
+	"help":              "/help [command]",
+	"player":            "/player overview [player]",
+	"player achievements": "/player achievements [player]",
+	"player equipment":  "/player equipment [player]",
+	"player heroes":     "/player heroes [player]",
+	"player overview":   "/player overview [player]",
+	"player spells":     "/player spells [player]",
+	"player troops":     "/player troops [player]",
+	"verify add":        "/verify add player",
+	"verify list":       "/verify list",
+	"verify main":       "/verify main player",
+	"verify remove":     "/verify remove player",
 }
 
 func getHelpCommandNames() []string {
@@ -2063,7 +2245,7 @@ func handleClanAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreate
 
 func handleVerifyAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	subcommand, focusedValue := getFocusedAutocompleteValue(i)
-	if subcommand == "verify" {
+	if subcommand == "list" {
 		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionApplicationCommandAutocompleteResult,
 			Data: &discordgo.InteractionResponseData{Choices: []*discordgo.ApplicationCommandOptionChoice{}},
@@ -2074,6 +2256,31 @@ func handleVerifyAutocomplete(s *discordgo.Session, i *discordgo.InteractionCrea
 		Type: discordgo.InteractionApplicationCommandAutocompleteResult,
 		Data: &discordgo.InteractionResponseData{
 			Choices: playerAutocompleteChoices(interactionUserID(i), focusedValue),
+		},
+	})
+}
+
+func openVerifyModal(s *discordgo.Session, i *discordgo.InteractionCreate, playerTag string) {
+	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseModal,
+		Data: &discordgo.InteractionResponseData{
+			CustomID: verifyTokenModalPrefix + playerTag,
+			Title:    botWatermark + " · Verify Account",
+			Components: []discordgo.MessageComponent{
+				discordgo.ActionsRow{
+					Components: []discordgo.MessageComponent{
+						discordgo.TextInput{
+							CustomID:    verifyTokenInputID,
+							Label:       "In-Game API Token",
+							Style:       discordgo.TextInputShort,
+							Placeholder: "Settings → More Settings → API Token",
+							Required:    true,
+							MinLength:   1,
+							MaxLength:   64,
+						},
+					},
+				},
+			},
 		},
 	})
 }
@@ -2091,13 +2298,10 @@ var (
 			Name:        "clan",
 			Description: "Clan stats and insights.",
 			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:         discordgo.ApplicationCommandOptionString,
-					Name:         "clan",
-					Description:  "Clan tag or known clan name.",
-					Required:     false,
-					Autocomplete: true,
-				},
+				clanPageSubcommand("overview", "Clan overview and details."),
+				clanPageSubcommand("members", "Clan member roster."),
+				clanPageSubcommand("wars", "Clan war log and current war."),
+				clanPageSubcommand("capital", "Clan Capital stats."),
 			},
 		},
 		{
@@ -2115,24 +2319,23 @@ var (
 		},
 		{
 			Name:        "player",
-			Description: "Player stats and progression.",
+			Description: "Player stats and upgrade progress.",
 			Options: []*discordgo.ApplicationCommandOption{
-				playerSubcommand("profile", "Shows a player summary."),
-				playerSubcommand("equipment", "Shows hero equipment levels."),
-				playerSubcommand("heroes", "Shows hero levels."),
-				playerSubcommand("troops", "Shows troop levels."),
-				playerSubcommand("spells", "Shows spell levels."),
-				playerSubcommand("achievements", "Shows achievement progress."),
-				playerSubcommand("upgrade-progress", "Shows troops, heroes, and spells progression."),
+				playerPageSubcommand("overview", "Player profile summary."),
+				playerPageSubcommand("troops", "Troop levels."),
+				playerPageSubcommand("heroes", "Hero levels."),
+				playerPageSubcommand("spells", "Spell levels."),
+				playerPageSubcommand("equipment", "Hero equipment levels."),
+				playerPageSubcommand("achievements", "Achievement progress."),
 			},
 		},
 		{
 			Name:        "verify",
-			Description: "Manage linked player accounts.",
+			Description: "Verify and link a player account, or manage linked accounts.",
 			Options: []*discordgo.ApplicationCommandOption{
 				{
 					Type:        discordgo.ApplicationCommandOptionSubCommand,
-					Name:        "verify",
+					Name:        "add",
 					Description: "Verify and link a player account.",
 					Options: []*discordgo.ApplicationCommandOption{
 						{
@@ -2165,7 +2368,7 @@ var (
 				},
 				{
 					Type:        discordgo.ApplicationCommandOptionSubCommand,
-					Name:        "set-main",
+					Name:        "main",
 					Description: "Set your default player account.",
 					Options: []*discordgo.ApplicationCommandOption{
 						{
@@ -2195,7 +2398,7 @@ var (
 				respondWithEmbed(s, i, withStatsEmbed(&discordgo.MessageEmbed{
 					Title:       "Help: " + commandName,
 					Description: formatHelpCommandList([]string{usage}),
-				}, ""))
+				}, commandThumbnailURL("help", Player{})))
 				return
 			}
 
@@ -2205,77 +2408,31 @@ var (
 			}
 			respondWithEmbed(s, i, withStatsEmbed(&discordgo.MessageEmbed{
 				Title:       "Available Commands",
-				Description: formatHelpCommandList(commands),
-			}, ""))
+				Description: formatHelpCommandList(commands) + helpDisclaimer,
+			}, commandThumbnailURL("help", Player{})))
 		},
-		"clan": handleClanCommand,
-		"player": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-			ctx := getCommandContext(i)
-			player, ok := resolveAndFetchPlayer(s, i)
-			if !ok {
-				return
-			}
-
-			switch ctx.subcommand {
-			case "profile":
-				respondWithEmbed(s, i, buildPlayerOverviewEmbed(player))
-			case "equipment":
-				respondWithEmbed(s, i, buildPlayerEquipmentProgressEmbed(player))
-			case "heroes":
-				respondWithEmbed(s, i, buildPlayerItemsEmbed(player, "Heroes", player.Heroes, "No heroes found."))
-			case "troops":
-				respondWithEmbed(s, i, buildPlayerItemsEmbed(player, "Troops", player.Troops, "No troops found."))
-			case "spells":
-				respondWithEmbed(s, i, buildPlayerItemsEmbed(player, "Spells", player.Spells, "No spells found."))
-			case "achievements":
-				sendPlayerAchievementsPanel(s, i, player, 0, playerAchDefaultSort, false)
-			case "upgrade-progress":
-				respondWithEmbed(s, i, buildPlayerUpgradeProgressEmbed(player))
-			default:
-				ephemeralText(s, i, "Unsupported player subcommand.")
-			}
-		},
+		"clan":   handleClanCommand,
+		"player": handlePlayerCommand,
 		"verify": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
 			ctx := getCommandContext(i)
 			userID := interactionUserID(i)
 
 			switch ctx.subcommand {
-			case "verify":
+			case "add":
 				playerTag, ok := resolvePlayerTag(userID, stringOption(ctx.options, "player"))
 				if !ok || playerTag == "" {
 					ephemeralText(s, i, "Provide a valid player tag.")
 					return
 				}
-				_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-					Type: discordgo.InteractionResponseModal,
-					Data: &discordgo.InteractionResponseData{
-						CustomID: verifyTokenModalPrefix + playerTag,
-						Title:    botWatermark + " · Verify Account",
-						Components: []discordgo.MessageComponent{
-							discordgo.ActionsRow{
-								Components: []discordgo.MessageComponent{
-									discordgo.TextInput{
-										CustomID:    verifyTokenInputID,
-										Label:       "In-Game API Token",
-										Style:       discordgo.TextInputShort,
-										Placeholder: "Settings → More Settings → API Token",
-										Required:    true,
-										MinLength:   1,
-										MaxLength:   64,
-									},
-								},
-							},
-						},
-					},
-				})
+				openVerifyModal(s, i, playerTag)
 			case "list":
 				accounts := listUserAccounts(userID)
 				mainTag, _ := getUserMainAccount(userID)
 				if len(accounts) == 0 {
 					respondWithEphemeralEmbed(s, i, buildStatusEmbed(
 						"Linked Accounts",
-						"No linked accounts yet. Use `/verify verify` with a player tag to start.",
-						"",
+						"No linked accounts yet. Use `/verify add` with a player tag to start.",
+						commandThumbnailURL("verify", Player{}),
 					))
 					return
 				}
@@ -2294,9 +2451,9 @@ var (
 				respondWithEphemeralEmbed(s, i, buildStatusEmbed(
 					"Account Removed",
 					"Removed linked account `"+playerTag+"`.",
-					"",
+					commandThumbnailURL("verify", Player{}),
 				))
-			case "set-main":
+			case "main":
 				playerTag, ok := resolvePlayerTag(userID, stringOption(ctx.options, "player"))
 				if !ok || playerTag == "" {
 					ephemeralText(s, i, "Provide one of your linked accounts.")
@@ -2310,7 +2467,7 @@ var (
 				respondWithEphemeralEmbed(s, i, buildStatusEmbed(
 					"Main Account Updated",
 					"Set `"+playerTag+"` as your main account.",
-					"",
+					commandThumbnailURL("verify", Player{}),
 				))
 			default:
 				ephemeralText(s, i, "Unsupported verify subcommand.")

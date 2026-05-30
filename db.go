@@ -3,10 +3,11 @@ package main
 import (
 	"database/sql"
 	"log"
+	"os"
 	"strings"
 	"time"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/tursodatabase/libsql-client-go/libsql"
 )
 
 var db *sql.DB
@@ -24,12 +25,20 @@ type clanSuggestion struct {
 }
 
 func initDb() {
+	url := strings.TrimSpace(os.Getenv("TURSO_DATABASE_URL"))
+	token := strings.TrimSpace(os.Getenv("TURSO_DATABASE_TOKEN"))
+	if url == "" || token == "" {
+		log.Fatal("TURSO_DATABASE_URL and TURSO_DATABASE_TOKEN are required")
+	}
+
 	var err error
-	db, err = sql.Open("sqlite3", "data.db")
+	db, err = sql.Open("libsql", url+"?authToken="+token)
 	if err != nil {
 		log.Fatal(err)
 	}
-	db.SetMaxOpenConns(1)
+	if err := db.Ping(); err != nil {
+		log.Fatal("turso db ping failed: ", err)
+	}
 
 	stmts := []string{
 		`CREATE TABLE IF NOT EXISTS user_accounts (
