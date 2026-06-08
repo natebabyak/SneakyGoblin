@@ -183,8 +183,8 @@ func getClanMembers(tag string) APIResult[[]ClanMember] {
 func patchClanMemberFields(data []byte, member *ClanMember, index int) {
 	var payload struct {
 		Items []struct {
-			Tag        string `json:"tag"`
-			League     League `json:"league"`
+			Tag        string     `json:"tag"`
+			League     League     `json:"league"`
 			LeagueTier LeagueTier `json:"leagueTier"`
 		} `json:"items"`
 	}

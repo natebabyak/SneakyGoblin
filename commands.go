@@ -1,11 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -17,36 +19,36 @@ type commandContext struct {
 }
 
 const (
-	verifyTokenModalPrefix = "verify:"
-	verifyTokenInputID     = "token"
-	botWatermark           = "SneakyGoblin"
-	embedColor             = 0x00C950
-	cocAssetBase           = "https://assets.clashk.ing/"
-	helpDisclaimer         = "\n\n---\nThis material is unofficial and is not endorsed by Supercell. For more information see Supercell's Fan Content Policy: www.supercell.com/fan-content-policy."
-	clanTabPrefix          = "clan-tab:"
-	clanTabOverview        = "overview"
-	clanTabMembers         = "members"
-	clanTabWars            = "wars"
-	clanTabCapital         = "capital"
-	clanMemPrefix          = "clan-mem:"
-	clanMemSortPrefix      = "clan-mem-sort:"
-	clanWarPrefix          = "clan-war:"
-	clanWarSortPrefix      = "clan-war-sort:"
-	clanMembersPerPage     = 15
-	clanWarsPerPage        = 15
-	clanMemberDefaultSort  = "league-trophies"
-	clanWarDefaultSort     = "date"
-	playerTabPrefix        = "player-tab:"
-	playerTabOverview      = "overview"
-	playerTabEquipment     = "equipment"
-	playerTabHeroes        = "heroes"
-	playerTabSpells        = "spells"
-	playerTabTroops        = "troops"
-	playerTabAchievements  = "achievements"
-	playerAchPrefix        = "player-ach:"
-	playerAchSortPrefix    = "player-ach-sort:"
+	verifyTokenModalPrefix    = "verify:"
+	verifyTokenInputID        = "token"
+	botWatermark              = "SneakyGoblin"
+	embedColor                = 0x00C950
+	cocAssetBase              = "https://assets.clashk.ing/"
+	helpDisclaimer            = "\n\n---\nThis material is unofficial and is not endorsed by Supercell. For more information see Supercell's Fan Content Policy: www.supercell.com/fan-content-policy."
+	clanTabPrefix             = "clan-tab:"
+	clanTabOverview           = "overview"
+	clanTabMembers            = "members"
+	clanTabWars               = "wars"
+	clanTabCapital            = "capital"
+	clanMemPrefix             = "clan-mem:"
+	clanMemSortPrefix         = "clan-mem-sort:"
+	clanWarPrefix             = "clan-war:"
+	clanWarSortPrefix         = "clan-war-sort:"
+	clanMembersPerPage        = 15
+	clanWarsPerPage           = 15
+	clanMemberDefaultSort     = "league-trophies"
+	clanWarDefaultSort        = "date"
+	playerTabPrefix           = "player-tab:"
+	playerTabOverview         = "overview"
+	playerTabEquipment        = "equipment"
+	playerTabHeroes           = "heroes"
+	playerTabSpells           = "spells"
+	playerTabTroops           = "troops"
+	playerTabAchievements     = "achievements"
+	playerAchPrefix           = "player-ach:"
+	playerAchSortPrefix       = "player-ach-sort:"
 	playerAchievementsPerPage = 15
-	playerAchDefaultSort   = "default"
+	playerAchDefaultSort      = "default"
 )
 
 type clanPanelState struct {
@@ -2164,24 +2166,226 @@ func resolveAndFetchPlayer(s *discordgo.Session, i *discordgo.InteractionCreate)
 	return resolveAndFetchPlayerForCommand(s, i, "player")
 }
 
+const bestEquipmentTopPlayers = 100
+
+func fetchGlobalTopPlayerTags(limit int) ([]string, string) {
+	rawURL := fmt.Sprintf("%slocations/global/rankings/players?limit=%d", baseURL, limit)
+	data, _, reason, ok := get(rawURL)
+	if !ok {
+		return nil, reason
+	}
+
+	var payload struct {
+		Items []struct {
+			Tag string `json:"tag"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, "failed to parse global player rankings"
+	}
+
+	tags := make([]string, 0, len(payload.Items))
+	for _, item := range payload.Items {
+		if tag := normalizeTag(item.Tag); tag != "" {
+			tags = append(tags, tag)
+		}
+	}
+	if len(tags) == 0 {
+		return nil, "no players found in global rankings"
+	}
+	return tags, ""
+}
+
+func fetchPlayerHeroEquipmentCombos(tag string) (map[string][2]string, bool) {
+	data, _, _, ok := get(baseURL + "players/" + formatTag(tag))
+	if !ok {
+		return nil, false
+	}
+
+	var payload struct {
+		Heroes []struct {
+			Name      string `json:"name"`
+			Level     int    `json:"level"`
+			Equipment []struct {
+				Name string `json:"name"`
+			} `json:"equipment"`
+		} `json:"heroes"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, false
+	}
+
+	out := make(map[string][2]string)
+	for _, hero := range payload.Heroes {
+		if hero.Level <= 0 || len(hero.Equipment) < 2 {
+			continue
+		}
+		names := make([]string, 0, 2)
+		for _, item := range hero.Equipment {
+			name := strings.TrimSpace(item.Name)
+			if name != "" {
+				names = append(names, name)
+			}
+		}
+		if len(names) < 2 {
+			continue
+		}
+		if len(names) > 2 {
+			names = names[:2]
+		}
+		sort.Strings(names)
+		out[hero.Name] = [2]string{names[0], names[1]}
+	}
+	return out, len(out) > 0
+}
+
+func buildBestEquipmentEmbed() (*discordgo.MessageEmbed, string) {
+	tags, errMsg := fetchGlobalTopPlayerTags(bestEquipmentTopPlayers)
+	if errMsg != "" {
+		return nil, errMsg
+	}
+
+	type comboKey struct {
+		hero string
+		a, b string
+	}
+	counts := make(map[comboKey]int)
+	sampledByHero := make(map[string]int)
+
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, 8)
+	loaded := 0
+
+	for _, tag := range tags {
+		wg.Add(1)
+		go func(playerTag string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			combos, ok := fetchPlayerHeroEquipmentCombos(playerTag)
+			if !ok {
+				return
+			}
+			mu.Lock()
+			loaded++
+			for hero, pair := range combos {
+				sampledByHero[hero]++
+				counts[comboKey{hero: hero, a: pair[0], b: pair[1]}]++
+			}
+			mu.Unlock()
+		}(tag)
+	}
+	wg.Wait()
+
+	if loaded == 0 {
+		return nil, "could not load hero equipment from top players"
+	}
+
+	heroNames := make([]string, 0, len(sampledByHero))
+	for hero := range sampledByHero {
+		heroNames = append(heroNames, hero)
+	}
+	sort.Strings(heroNames)
+
+	fields := make([]*discordgo.MessageEmbedField, 0, len(heroNames))
+	for _, heroName := range heroNames {
+		type rankedCombo struct {
+			a, b  string
+			count int
+		}
+		ranked := make([]rankedCombo, 0)
+		for key, count := range counts {
+			if key.hero != heroName {
+				continue
+			}
+			ranked = append(ranked, rankedCombo{a: key.a, b: key.b, count: count})
+		}
+		sort.Slice(ranked, func(i, j int) bool {
+			if ranked[i].count != ranked[j].count {
+				return ranked[i].count > ranked[j].count
+			}
+			if ranked[i].a != ranked[j].a {
+				return ranked[i].a < ranked[j].a
+			}
+			return ranked[i].b < ranked[j].b
+		})
+		if len(ranked) > 3 {
+			ranked = ranked[:3]
+		}
+
+		lines := make([]string, 0, len(ranked)+1)
+		lines = append(lines, fmt.Sprintf("-# %d players sampled", sampledByHero[heroName]))
+		if len(ranked) == 0 {
+			lines = append(lines, "No combinations found.")
+		} else {
+			for i, combo := range ranked {
+				lines = append(lines, fmt.Sprintf(
+					"**%d.** %s + %s — `%d` players",
+					i+1,
+					combo.a,
+					combo.b,
+					combo.count,
+				))
+			}
+		}
+		fields = append(fields, &discordgo.MessageEmbedField{
+			Name:   heroName,
+			Value:  strings.Join(lines, "\n"),
+			Inline: false,
+		})
+	}
+
+	return withStatsEmbed(&discordgo.MessageEmbed{
+		Title: "Top Equipment Combinations",
+		Description: fmt.Sprintf(
+			"Most-used 2-equipment loadouts from the top `%d` global players (`%d` profiles loaded).",
+			len(tags),
+			loaded,
+		),
+		Fields: fields,
+	}, commandThumbnailURL("equipment", Player{})), ""
+}
+
+func handleBestEquipmentCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+	}); err != nil {
+		return
+	}
+
+	go func() {
+		embed, errMsg := buildBestEquipmentEmbed()
+		if errMsg != "" {
+			_, _ = s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{Content: errMsg})
+			return
+		}
+		_, _ = s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
+			Embeds: []*discordgo.MessageEmbed{embed},
+		})
+	}()
+}
+
 var helpUsageByCommand = map[string]string{
-	"clan":              "/clan overview [clan]",
-	"clan capital":      "/clan capital [clan]",
-	"clan members":      "/clan members [clan]",
-	"clan overview":     "/clan overview [clan]",
-	"clan wars":         "/clan wars [clan]",
-	"help":              "/help [command]",
-	"player":            "/player overview [player]",
+	"clan":                "/clan overview [clan]",
+	"clan capital":        "/clan capital [clan]",
+	"clan members":        "/clan members [clan]",
+	"clan overview":       "/clan overview [clan]",
+	"clan wars":           "/clan wars [clan]",
+	"help":                "/help [command]",
+	"player":              "/player overview [player]",
 	"player achievements": "/player achievements [player]",
-	"player equipment":  "/player equipment [player]",
-	"player heroes":     "/player heroes [player]",
-	"player overview":   "/player overview [player]",
-	"player spells":     "/player spells [player]",
-	"player troops":     "/player troops [player]",
-	"verify add":        "/verify add player",
-	"verify list":       "/verify list",
-	"verify main":       "/verify main player",
-	"verify remove":     "/verify remove player",
+	"player equipment":    "/player equipment [player]",
+	"player heroes":       "/player heroes [player]",
+	"player overview":     "/player overview [player]",
+	"player spells":       "/player spells [player]",
+	"player troops":       "/player troops [player]",
+	"verify add":          "/verify add player",
+	"verify list":         "/verify list",
+	"verify main":         "/verify main player",
+	"verify remove":       "/verify remove player",
+	"best-equipment":      "/best-equipment",
 }
 
 func getHelpCommandNames() []string {
@@ -2330,6 +2534,10 @@ var (
 			},
 		},
 		{
+			Name:        "best-equipment",
+			Description: "Top hero equipment loadouts among the top 100 global players.",
+		},
+		{
 			Name:        "verify",
 			Description: "Verify and link a player account, or manage linked accounts.",
 			Options: []*discordgo.ApplicationCommandOption{
@@ -2411,8 +2619,9 @@ var (
 				Description: formatHelpCommandList(commands) + helpDisclaimer,
 			}, commandThumbnailURL("help", Player{})))
 		},
-		"clan":   handleClanCommand,
-		"player": handlePlayerCommand,
+		"clan":           handleClanCommand,
+		"player":         handlePlayerCommand,
+		"best-equipment": handleBestEquipmentCommand,
 		"verify": func(s *discordgo.Session, i *discordgo.InteractionCreate) {
 			ctx := getCommandContext(i)
 			userID := interactionUserID(i)
