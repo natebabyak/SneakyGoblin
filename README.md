@@ -13,14 +13,14 @@ SneakyGoblin is a Discord bot for [Clash of Clans](https://supercell.com/en/game
 - **Account linking** — Verify ownership via the in-game API token (Clash `verifytoken` endpoint)
 - **Smart defaults** — Optional `player` and `clan` arguments fall back to your linked main account; `/clan` uses your verified account’s clan when you omit a tag
 - **Autocomplete** — Player and clan options suggest tags and names the bot has seen before
-- **Remote cache** — [Turso](https://turso.tech/) stores known players/clans and linked Discord accounts for faster autocomplete and lookups
+- **Local or remote cache** — SQLite-compatible storage (local file via [tursogo](https://docs.turso.tech/sdk/go/quickstart), or remote [Turso](https://turso.tech/) / libSQL) for known players/clans and linked Discord accounts
 
 ## Requirements
 
 - Go 1.25 or newer
-- A [Turso](https://turso.tech/) database (see [docs/turso.md](docs/turso.md))
 - A [Clash of Clans API key](https://developer.clashofclans.com/)
 - A [Discord application](https://discord.com/developers/applications) with a bot token
+- Optional: a remote [Turso](https://turso.tech/) / libSQL database for production (local file works for development)
 
 ## Quick start
 
@@ -41,7 +41,7 @@ go mod download
 go run .
 ```
 
-On startup the bot connects to your Turso database, connects to Discord, clears global slash commands, and registers commands on the guild specified by `DISCORD_GUILD_ID`. Restart the bot after changing command definitions or interactive components so Discord receives the updates.
+On startup the bot opens the database from `DATABASE_URL`, connects to Discord, clears global slash commands, and registers commands on the guild specified by `DISCORD_GUILD_ID`. Restart the bot after changing command definitions or interactive components so Discord receives the updates.
 
 ## Configuration
 
@@ -52,8 +52,19 @@ On startup the bot connects to your Turso database, connects to Discord, clears 
 | `DISCORD_APPLICATION_ID` | Yes | Discord application ID (used for command registration) |
 | `DISCORD_GUILD_ID` | Yes | Guild (server) ID where slash commands are registered |
 | `DISCORD_PUBLIC_KEY` | No | Loaded from `.env` but not used by the current codebase |
-| `TURSO_DATABASE_URL` | Yes | Turso database URL (from `turso db show --url`) |
-| `TURSO_DATABASE_TOKEN` | Yes | Turso database auth token |
+| `DATABASE_URL` | Yes | Database connection string (see below) |
+
+### `DATABASE_URL`
+
+Switch between local and remote storage by changing this value only:
+
+| Value | Driver | Typical use |
+|-------|--------|-------------|
+| `file:sneakygoblin.db` or `sneakygoblin.db` | tursogo (`turso`) | Local file for development |
+| `:memory:` | tursogo (`turso`) | In-memory (tests / throwaway) |
+| `libsql://….turso.io?authToken=…` | libsql | Remote Turso / libSQL |
+
+For remote URLs, put the auth token in the query string (`?authToken=...`). Schemes `libsql`, `https`, `http`, and `turso` are treated as remote.
 
 `DISCORD_GUILD_ID` is required because commands are registered as **guild commands** for faster iteration during development. To serve multiple servers you would need to adjust command registration in `main.go` (for example, global registration or per-guild loops).
 
@@ -146,9 +157,9 @@ The first successfully linked account becomes your main account if none is set. 
 1. You run `/verify add` with your player tag (for example `#2ABC123`).
 2. The bot shows a modal asking for the one-time API token from the game.
 3. The bot calls the Clash API verify endpoint to confirm you own that account.
-4. On success, the tag is stored in Turso and associated with your Discord user ID.
+4. On success, the tag is stored in the database and associated with your Discord user ID.
 
-Linked accounts are per Discord user and stored in your Turso database.
+Linked accounts are per Discord user and stored via `DATABASE_URL`.
 
 ## Embeds and UI
 
@@ -164,21 +175,21 @@ Linked accounts are per Discord user and stored in your Turso database.
 ├── commands.go   # Slash command definitions, handlers, embed builders, UI components
 ├── api.go        # Clash of Clans HTTP client
 ├── models.go     # API response types (Clash data model)
-├── db.go         # Turso schema and persistence
+├── db.go         # Database connection, schema, and persistence
 ├── go.mod
 └── .env.example
 ```
 
 ## Data storage
 
-The bot connects to a remote [Turso](https://turso.tech/) database (schema is created on first run) and stores:
+The bot connects using `DATABASE_URL` (schema is created on first run) and stores:
 
 - **user_accounts** — Discord user ID, player tag, main-account flag
 - **known_players** — Cached player names, clan tags, last seen
 - **known_clans** — Cached clan names and tags
 - **command_usage** — Recent player lookups for autocomplete ranking
 
-See [docs/turso.md](docs/turso.md) for setup. Turso handles persistence across deployments; no local database file is required.
+For local development, default to `file:sneakygoblin.db` (created in the working directory). For production, point `DATABASE_URL` at a remote Turso / libSQL URL with `?authToken=...`.
 
 ## Building for production
 
@@ -199,7 +210,7 @@ Run the binary under a process manager (systemd, Docker, etc.) and ensure the ho
 | Clan command asks to verify | Link an account with `/verify add`; account must be in a clan; run `/player overview` once to refresh cached clan data |
 | War log empty or private | Clan war log must be public in-game; API returns limited data when private |
 | Verification fails | Token is fresh (one-time use); tag includes `#`; API key is valid |
-| Turso connection errors | `TURSO_DATABASE_URL` and `TURSO_DATABASE_TOKEN` set in `.env`; database exists and token is valid |
+| Database connection errors | `DATABASE_URL` set in `.env`; for remote URLs include a valid `authToken`; for local files ensure the path is writable |
 
 ## Acknowledgements
 

@@ -3,11 +3,13 @@ package main
 import (
 	"database/sql"
 	"log"
+	"net/url"
 	"os"
 	"strings"
 	"time"
 
 	_ "github.com/tursodatabase/libsql-client-go/libsql"
+	_ "turso.tech/database/tursogo"
 )
 
 var db *sql.DB
@@ -24,20 +26,52 @@ type clanSuggestion struct {
 	Name string
 }
 
+func isRemoteDatabaseURL(dsn string) bool {
+	if dsn == ":memory:" {
+		return false
+	}
+	u, err := url.Parse(dsn)
+	if err != nil || u.Scheme == "" {
+		return false
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "libsql", "https", "http", "turso":
+		return true
+	default:
+		return false
+	}
+}
+
+func localDatabasePath(dsn string) string {
+	switch {
+	case strings.HasPrefix(dsn, "file://"):
+		return strings.TrimPrefix(dsn, "file://")
+	case strings.HasPrefix(dsn, "file:"):
+		return strings.TrimPrefix(dsn, "file:")
+	case strings.HasPrefix(dsn, "sqlite:"):
+		return strings.TrimPrefix(dsn, "sqlite:")
+	default:
+		return dsn
+	}
+}
+
 func initDb() {
-	url := strings.TrimSpace(os.Getenv("TURSO_DATABASE_URL"))
-	token := strings.TrimSpace(os.Getenv("TURSO_DATABASE_TOKEN"))
-	if url == "" || token == "" {
-		log.Fatal("TURSO_DATABASE_URL and TURSO_DATABASE_TOKEN are required")
+	dsn := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	if dsn == "" {
+		log.Fatal("DATABASE_URL is required")
 	}
 
 	var err error
-	db, err = sql.Open("libsql", url+"?authToken="+token)
+	if isRemoteDatabaseURL(dsn) {
+		db, err = sql.Open("libsql", dsn)
+	} else {
+		db, err = sql.Open("turso", localDatabasePath(dsn))
+	}
 	if err != nil {
 		log.Fatal(err)
 	}
 	if err := db.Ping(); err != nil {
-		log.Fatal("turso db ping failed: ", err)
+		log.Fatal("database ping failed: ", err)
 	}
 
 	stmts := []string{

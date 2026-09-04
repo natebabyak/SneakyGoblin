@@ -1,2 +1,5 @@
 .env
 main
+*.db
+*.db-wal
+*.db-shm
